@@ -1,0 +1,13 @@
+# Android / Gradle
+.gradle/
+/build/
+*/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Generated artifacts
+.externalNativeBuild/
+.cxx/
+.kotlin/
