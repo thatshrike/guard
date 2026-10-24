@@ -8,7 +8,7 @@ import org.junit.Test
 class AudioSignalProcessorTest {
     @Test
     fun silenceProducesQuietFeatureVector() {
-        val samples = ShortArray(2_048)
+        val samples = FloatArray(2_048)
         val features = AudioSignalProcessor().extract(samples, samples.size, MotionSnapshot())
 
         assertTrue(features.loudness < 0.05f)
@@ -17,8 +17,8 @@ class AudioSignalProcessorTest {
 
     @Test
     fun transientProducesNonZeroEnergyFeatures() {
-        val samples = ShortArray(2_048)
-        samples[1_024] = Short.MAX_VALUE
+        val samples = FloatArray(2_048)
+        samples[1_024] = 1f
         val features = AudioSignalProcessor().extract(
             samples,
             samples.size,

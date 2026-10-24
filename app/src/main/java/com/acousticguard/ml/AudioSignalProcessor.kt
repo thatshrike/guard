@@ -11,7 +11,7 @@ import kotlin.math.sqrt
  * PCM buffer after this function returns; no audio is retained by this class.
  */
 class AudioSignalProcessor {
-    fun extract(samples: ShortArray, sampleCount: Int, motion: MotionSnapshot): AcousticFeatureVector {
+    fun extract(samples: FloatArray, sampleCount: Int, motion: MotionSnapshot): AcousticFeatureVector {
         val count = sampleCount.coerceIn(0, samples.size)
         if (count == 0) return AcousticFeatureVector(0f, 0f, 0f, 0f, 0f, 1f, 0f, motion.energy, motion.jerk)
 
@@ -19,12 +19,12 @@ class AudioSignalProcessor {
         var peak = 0.0
         var diffEnergy = 0.0
         var silenceSamples = 0
-        var previous = samples[0] / PCM_SCALE
+        var previous = samples[0]
         val envelope = FloatArray(ENVELOPE_BUCKETS)
         val bucketSize = (count / ENVELOPE_BUCKETS).coerceAtLeast(1)
 
         for (index in 0 until count) {
-            val value = samples[index] / PCM_SCALE
+            val value = samples[index]
             val absolute = abs(value)
             sumSquares += value * value
             peak = maxOf(peak, absolute.toDouble())
@@ -79,7 +79,6 @@ class AudioSignalProcessor {
     }
 
     private companion object {
-        const val PCM_SCALE = 32768f
         const val ENVELOPE_BUCKETS = 16
         const val SILENCE_THRESHOLD = 0.008f
         const val MIN_SIGNAL = 1e-6f

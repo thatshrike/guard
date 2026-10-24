@@ -154,7 +154,11 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     return@launch
                 }
             val windowSamples = classifier.requiredInputBufferSize
-            val buffer = ShortArray(windowSamples)
+            // tensorflow-lite-task-audio creates an AudioRecord configured for PCM_FLOAT.
+            // Reading that recorder into a ShortArray returns an AudioRecord error on devices
+            // that enforce the encoding, which previously surfaced as "microphone stopped
+            // unexpectedly". Keep the samples in the format used by TensorAudio.
+            val buffer = FloatArray(windowSamples)
             val record = runCatching { classifier.createAudioRecord() }
                 .getOrElse {
                     classifier.close()
@@ -212,7 +216,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     }
 
                     // Make the temporary PCM window eligible for collection without retaining audio.
-                    buffer.fill(0)
+                    buffer.fill(0f)
                 }
             } catch (_: SecurityException) {
                 MonitoringStatusStore.update { it.copy(engineState = EngineState.BLOCKED, message = "Microphone permission was revoked.") }
@@ -223,7 +227,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 record.release()
                 classifier.close()
                 audioRecord = null
-                buffer.fill(0)
+                buffer.fill(0f)
                 inferenceJob = null
             }
         }

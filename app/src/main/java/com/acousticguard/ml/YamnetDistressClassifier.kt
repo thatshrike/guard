@@ -44,7 +44,7 @@ class YamnetDistressClassifier(context: Context) : Closeable {
 
     @Synchronized
     fun infer(
-        samples: ShortArray,
+        samples: FloatArray,
         motion: MotionSnapshot,
         acousticFeatures: AcousticFeatureVector? = null,
     ): DistressInference {

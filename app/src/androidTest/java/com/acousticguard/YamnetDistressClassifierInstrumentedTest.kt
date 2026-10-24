@@ -17,7 +17,7 @@ class YamnetDistressClassifierInstrumentedTest {
         YamnetDistressClassifier(context).use { classifier ->
             assertTrue(classifier.requiredInputBufferSize > 0)
             val inference = classifier.infer(
-                samples = ShortArray(classifier.requiredInputBufferSize),
+                samples = FloatArray(classifier.requiredInputBufferSize),
                 motion = MotionSnapshot(),
             )
 
