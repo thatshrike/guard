@@ -1,7 +1,8 @@
 package com.acousticguard
 
-import com.acousticguard.ml.MotionSnapshot
+import com.acousticguard.ml.AcousticFeatureVector
 import com.acousticguard.ml.DistressMarker
+import com.acousticguard.ml.MotionSnapshot
 import com.acousticguard.ml.YamnetCategoryScore
 import com.acousticguard.ml.YamnetLabelMapper
 import org.junit.Assert.assertEquals
@@ -36,5 +37,47 @@ class YamnetLabelMapperTest {
         assertEquals(0f, inference.screamProbability, 0.0001f)
         assertEquals(0f, inference.respiratoryProbability, 0.0001f)
         assertEquals(0f, inference.impactProbability, 0.0001f)
+    }
+
+    @Test
+    fun loudSpeechUsesTheLanguageIndependentVocalDistressPath() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Speech", 0.90f)),
+            motion = MotionSnapshot(),
+            acousticFeatures = AcousticFeatureVector(
+                loudness = 0.90f,
+                highFrequencyRatio = 0.70f,
+                spectralFlux = 0.40f,
+                crestFactor = 0.50f,
+                lowFrequencyRatio = 0.40f,
+                silenceRatio = 0.05f,
+                envelopeVariation = 0.60f,
+                motionEnergy = 0f,
+                motionJerk = 0f,
+            ),
+        )
+
+        assertTrue(inference.screamProbability >= 0.72f)
+    }
+
+    @Test
+    fun ordinarySpeechDoesNotReachTheVocalDistressThreshold() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Speech", 0.90f)),
+            motion = MotionSnapshot(),
+            acousticFeatures = AcousticFeatureVector(
+                loudness = 0.45f,
+                highFrequencyRatio = 0.35f,
+                spectralFlux = 0.20f,
+                crestFactor = 0.40f,
+                lowFrequencyRatio = 0.60f,
+                silenceRatio = 0.20f,
+                envelopeVariation = 0.30f,
+                motionEnergy = 0f,
+                motionJerk = 0f,
+            ),
+        )
+
+        assertTrue(inference.screamProbability < 0.72f)
     }
 }

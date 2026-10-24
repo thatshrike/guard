@@ -40,4 +40,37 @@ class DistressFusionEngineTest {
         assertTrue(decision!!.confirmed)
         assertTrue(decision.marker == DistressMarker.SCREAM)
     }
+
+    @Test
+    fun sustainedVocalDistressConfirmsWhenThePhoneIsStationary() {
+        val engine = DistressFusionEngine()
+        val stationary = MotionSnapshot()
+        val vocalDistress = DistressInference(
+            screamProbability = 0.80f,
+            respiratoryProbability = 0f,
+            impactProbability = 0f,
+            modelVersion = "test",
+        )
+
+        engine.update(vocalDistress, stationary, nowMs = 0L)
+        engine.update(vocalDistress, stationary, nowMs = 1_000L)
+        val decision = engine.update(vocalDistress, stationary, nowMs = 2_000L)
+
+        assertNotNull(decision)
+        assertTrue(decision!!.confirmed)
+        assertTrue(decision.marker == DistressMarker.SCREAM)
+    }
+
+    @Test
+    fun impactWithoutMotionDoesNotProduceACandidate() {
+        val engine = DistressFusionEngine()
+        val impact = DistressInference(
+            screamProbability = 0f,
+            respiratoryProbability = 0f,
+            impactProbability = 0.99f,
+            modelVersion = "test",
+        )
+
+        assertTrue(engine.update(impact, MotionSnapshot(), nowMs = 0L) == null)
+    }
 }

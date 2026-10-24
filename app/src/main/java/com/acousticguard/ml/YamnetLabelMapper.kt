@@ -12,14 +12,26 @@ object YamnetLabelMapper {
         motion: MotionSnapshot,
         acousticFeatures: AcousticFeatureVector? = null,
         modelVersion: String = MODEL_VERSION,
+        modelSource: ModelSource = ModelSource.YAMNET_BASELINE,
     ): DistressInference {
         val screamLabelScore = maximumScore(categories, SCREAM_LABELS)
+        val speechLabelScore = maximumScore(categories, SPEECH_LABELS)
         val respiratoryLabelScore = maximumScore(categories, RESPIRATORY_LABELS)
         val acousticImpact = maximumScore(categories, IMPACT_LABELS)
         val scream = if (acousticFeatures == null) {
             screamLabelScore
         } else {
-            (screamLabelScore * (0.55f + 0.45f * acousticFeatures.highFrequencyRatio)).coerceIn(0f, 1f)
+            // YAMNet does not transcribe the spoken word and does not have a Hindi-specific
+            // distress label. It does, however, identify speech/shouting acoustically. Combine
+            // that label score with loudness and vocal activity so a shouted "help" or "मदद"
+            // can use the same language-independent path as a scream.
+            val vocalEnergy = (
+                acousticFeatures.loudness * 0.65f +
+                    acousticFeatures.highFrequencyRatio * 0.20f +
+                    (1f - acousticFeatures.silenceRatio) * 0.15f
+                ).coerceIn(0f, 1f)
+            val loudSpeechScore = speechLabelScore * (0.35f + 0.65f * vocalEnergy)
+            maxOf(screamLabelScore, loudSpeechScore).coerceIn(0f, 1f)
         }
         val respiratory = if (acousticFeatures == null) {
             respiratoryLabelScore
@@ -35,22 +47,39 @@ object YamnetLabelMapper {
             0f
         }
 
+        val strongestDistressProbability = maxOf(scream, respiratory, impact)
+        val normal = (1f - strongestDistressProbability).coerceIn(0f, 1f)
+        val uncertainty = when {
+            // An absence of allow-listed distress labels is a useful, low-cost negative signal for
+            // the scheduler even though YAMNet has no calibrated "normal" output head.
+            strongestDistressProbability <= 0.20f -> 0.05f
+            strongestDistressProbability >= 0.72f -> (1f - strongestDistressProbability).coerceIn(0f, 1f)
+            else -> 0.80f
+        }
+        val audioQuality = acousticFeatures?.let {
+            (1f - it.silenceRatio).coerceIn(0f, 1f)
+        } ?: 1f
+
         return DistressInference(
             screamProbability = scream,
             respiratoryProbability = respiratory,
             impactProbability = impact,
             modelVersion = modelVersion,
+            normalProbability = normal,
+            uncertainty = uncertainty,
+            audioQuality = audioQuality,
+            modelSource = modelSource,
         )
     }
 
-    private fun maximumScore(categories: List<YamnetCategoryScore>, labels: Set<String>): Float =
-        categories.asSequence()
-            .filter { it.label in labels }
-            .map { it.score }
-            .filter { it.isFinite() }
-            .maxOrNull()
-            ?.coerceIn(0f, 1f)
-            ?: 0f
+    private fun maximumScore(categories: List<YamnetCategoryScore>, labels: Set<String>): Float {
+        var maximum = 0f
+        for (category in categories) {
+            if (category.label !in labels || !category.score.isFinite()) continue
+            maximum = maxOf(maximum, category.score)
+        }
+        return maximum.coerceIn(0f, 1f)
+    }
 
     private const val MODEL_VERSION = "yamnet-audioset-1"
 
@@ -61,6 +90,12 @@ object YamnetLabelMapper {
         "Shout",
         "Yell",
         "Children shouting",
+    )
+    private val SPEECH_LABELS = setOf(
+        "Speech",
+        "Male speech, man speaking",
+        "Female speech, woman speaking",
+        "Child speech, kid speaking",
     )
     private val RESPIRATORY_LABELS = setOf(
         "Breathing",

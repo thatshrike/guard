@@ -2,29 +2,31 @@ package com.acousticguard.ml
 
 import android.content.Context
 import java.security.MessageDigest
-import org.json.JSONObject
 
 /** Verifies that the model packaged in the APK matches the recorded artifact manifest. */
 object ModelAssetVerifier {
+    fun readManifest(context: Context, manifestAssetName: String): ModelManifest =
+        context.assets.open(manifestAssetName).use { input ->
+            ModelManifest.fromJson(input.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        }
+
     fun verify(
         context: Context,
         modelAssetName: String,
         manifestAssetName: String,
-        expectedModelVersion: String,
-    ) {
-        val manifest = context.assets.open(manifestAssetName).use { input ->
-            JSONObject(input.bufferedReader(Charsets.UTF_8).use { it.readText() })
-        }
-        require(manifest.optString("model_version") == expectedModelVersion) {
-            "The packaged model version does not match the classifier contract."
-        }
-        require(manifest.optString("artifact") == modelAssetName) {
+        expectedModelVersion: String? = null,
+        expectedRuntime: String? = null,
+        expectedQuantization: String? = null,
+    ): ModelManifest {
+        val manifest = readManifest(context, manifestAssetName)
+        require(manifest.artifact == modelAssetName) {
             "The packaged model manifest points to a different asset."
         }
-        val expectedHash = manifest.optString("sha256")
-        require(expectedHash.matches(SHA256_HEX)) {
-            "The packaged model manifest contains an invalid SHA-256 digest."
-        }
+        manifest.validate(
+            expectedModelVersion = expectedModelVersion,
+            expectedRuntime = expectedRuntime,
+            expectedQuantization = expectedQuantization,
+        )
 
         val actualHash = context.assets.open(modelAssetName).use { input ->
             val digest = MessageDigest.getInstance("SHA-256")
@@ -36,11 +38,11 @@ object ModelAssetVerifier {
             }
             digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
         }
-        require(actualHash.equals(expectedHash, ignoreCase = true)) {
+        require(actualHash.equals(manifest.sha256, ignoreCase = true)) {
             "The packaged model failed its integrity check."
         }
+        return manifest
     }
 
     private const val BUFFER_BYTES = 64 * 1_024
-    private val SHA256_HEX = Regex("[0-9a-fA-F]{64}")
 }

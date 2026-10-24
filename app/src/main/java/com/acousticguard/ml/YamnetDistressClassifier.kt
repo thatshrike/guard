@@ -1,8 +1,6 @@
 package com.acousticguard.ml
 
 import android.content.Context
-import android.media.AudioRecord
-import java.io.Closeable
 import org.tensorflow.lite.support.audio.TensorAudio
 import org.tensorflow.lite.task.audio.classifier.AudioClassifier
 import org.tensorflow.lite.task.core.BaseOptions
@@ -13,9 +11,20 @@ import org.tensorflow.lite.task.core.BaseOptions
  * The model is an AudioSet classifier, not a medical or emergency-response model. Its labels are
  * deliberately narrowed by YamnetLabelMapper and then corroborated by DistressFusionEngine.
  */
-class YamnetDistressClassifier(context: Context) : Closeable {
+class YamnetDistressClassifier(
+    context: Context,
+    private val modelSource: ModelSource = ModelSource.YAMNET_BASELINE,
+) : DistressClassifier {
     private val classifier: AudioClassifier
     private val tensorAudio: TensorAudio
+
+    override val modelInfo = ModelInfo(
+        modelVersion = MODEL_VERSION,
+        runtime = "tflite-task-audio",
+        quantization = "float32",
+        inferenceMode = if (modelSource == ModelSource.YAMNET_FALLBACK) "fallback" else "baseline",
+        source = modelSource,
+    )
 
     init {
         ModelAssetVerifier.verify(
@@ -37,13 +46,13 @@ class YamnetDistressClassifier(context: Context) : Closeable {
         tensorAudio = classifier.createInputTensorAudio()
     }
 
-    val requiredInputBufferSize: Int
+    override val requiredInputBufferSize: Int
         get() = classifier.requiredInputBufferSize.toInt()
 
-    fun createAudioRecord(): AudioRecord = classifier.createAudioRecord()
+    override val sampleRateHz: Int = MODEL_SAMPLE_RATE
 
     @Synchronized
-    fun infer(
+    override fun infer(
         samples: FloatArray,
         motion: MotionSnapshot,
         acousticFeatures: AcousticFeatureVector? = null,
@@ -56,7 +65,13 @@ class YamnetDistressClassifier(context: Context) : Closeable {
         val categories = classifier.classify(tensorAudio)
             .flatMap { it.categories }
             .map { YamnetCategoryScore(label = it.label, score = it.score) }
-        return YamnetLabelMapper.toInference(categories, motion, acousticFeatures)
+        return YamnetLabelMapper.toInference(
+            categories = categories,
+            motion = motion,
+            acousticFeatures = acousticFeatures,
+            modelVersion = modelInfo.modelVersion,
+            modelSource = modelInfo.source,
+        )
     }
 
     override fun close() {
@@ -68,5 +83,6 @@ class YamnetDistressClassifier(context: Context) : Closeable {
         const val MODEL_MANIFEST_ASSET = "yamnet_model_manifest.json"
         const val MODEL_VERSION = "yamnet-audioset-1"
         const val MAX_RESULTS = 521
+        const val MODEL_SAMPLE_RATE = 16_000
     }
 }

@@ -11,6 +11,8 @@ import kotlin.math.sqrt
  * PCM buffer after this function returns; no audio is retained by this class.
  */
 class AudioSignalProcessor {
+    private val envelope = FloatArray(ENVELOPE_BUCKETS)
+
     fun extract(samples: FloatArray, sampleCount: Int, motion: MotionSnapshot): AcousticFeatureVector {
         val count = sampleCount.coerceIn(0, samples.size)
         if (count == 0) return AcousticFeatureVector(0f, 0f, 0f, 0f, 0f, 1f, 0f, motion.energy, motion.jerk)
@@ -20,7 +22,7 @@ class AudioSignalProcessor {
         var diffEnergy = 0.0
         var silenceSamples = 0
         var previous = samples[0]
-        val envelope = FloatArray(ENVELOPE_BUCKETS)
+        envelope.fill(0f)
         val bucketSize = (count / ENVELOPE_BUCKETS).coerceAtLeast(1)
 
         for (index in 0 until count) {
@@ -67,7 +69,9 @@ class AudioSignalProcessor {
     private fun normalizedVariation(values: FloatArray, sampleCount: Int, bucketSize: Int): Float {
         val actualBuckets = ((sampleCount + bucketSize - 1) / bucketSize).coerceIn(1, values.size)
         if (actualBuckets < 2) return 0f
-        val mean = values.take(actualBuckets).average().toFloat().coerceAtLeast(EPSILON)
+        var total = 0f
+        for (index in 0 until actualBuckets) total += values[index] / bucketSize
+        val mean = (total / actualBuckets).coerceAtLeast(EPSILON)
         var variance = 0f
         for (index in 0 until actualBuckets) {
             val average = values[index] / bucketSize

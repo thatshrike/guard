@@ -201,13 +201,16 @@ private fun MonitorScreen(
             item { InlineNotice(message = message, isError = true) }
         }
         item {
-            SectionHeader(title = "Local detector", caption = "Three signals. One cautious decision.")
+            SectionHeader(
+                title = "Local detector",
+                caption = "Sustained screams or loud speech in any language start a 10-second cancel window.",
+            )
         }
         item {
             DetectorCard(
                 icon = Icons.Filled.GraphicEq,
                 title = "Vocal distress",
-                description = "High-frequency vocal tract friction and scream-like energy.",
+                description = "Screams and loud shouted speech, without transcribing or storing words.",
                 color = SignalBlue,
             )
         }
@@ -418,6 +421,9 @@ private fun SafetyScreen(status: MonitoringStatus, onOpenSettings: () -> Unit) {
             SafetyPolicyCard()
         }
         item {
+            ModelStatusCard(status = status)
+        }
+        item {
             QueueCard(status = status)
         }
         item {
@@ -488,6 +494,43 @@ private fun SafetyPolicyCard() {
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(policy, style = MaterialTheme.typography.bodyMedium)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelStatusCard(status: MonitoringStatus) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text("Local model health", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(10.dp))
+            SettingRow(label = "Active version", value = status.modelInfo.modelVersion)
+            SettingRow(label = "Runtime", value = status.modelInfo.runtime)
+            SettingRow(label = "Quantization", value = status.modelInfo.quantization)
+            SettingRow(label = "Mode", value = status.monitoringMode.label)
+            SettingRow(label = "Source", value = status.modelInfo.source.label)
+            SettingRow(label = "Motion", value = if (status.motionReady) "Available" else "Unavailable")
+            SettingRow(
+                label = "Model calls",
+                value = "${status.detectionMetrics.modelInvocations} / ${status.detectionMetrics.audioWindowsRead} windows",
+            )
+            SettingRow(
+                label = "Latency",
+                value = "p50 ${status.detectionMetrics.inferenceLatencyP50Ms} ms · p95 ${status.detectionMetrics.inferenceLatencyP95Ms} ms",
+            )
+            status.lastModelError?.let { message ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -616,10 +659,29 @@ private fun SettingsScreen(
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text("Engine", style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.height(12.dp))
-                    SettingRow(label = "Inference", value = "${statusModelLabel()}")
+                    SettingRow(label = "Model", value = status.modelInfo.modelVersion)
+                    SettingRow(
+                        label = "Runtime",
+                        value = "${status.modelInfo.runtime} / ${status.modelInfo.quantization}",
+                    )
+                    SettingRow(label = "Inference", value = "On-device")
+                    SettingRow(label = "Monitoring state", value = status.monitoringMode.label)
+                    SettingRow(label = "Model source", value = status.modelInfo.source.label)
+                    SettingRow(
+                        label = "Fallback active",
+                        value = if (status.fallbackModelActive) "Yes" else "No",
+                    )
                     SettingRow(label = "Audio retention", value = "None")
                     SettingRow(label = "Network transport", value = "Disabled")
                     SettingRow(label = "Motion corroboration", value = if (status.motionReady) "Available" else "Standby")
+                    status.lastModelError?.let { error ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Model note: $error",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -874,5 +936,3 @@ private fun notificationsAvailable(context: Context): Boolean =
 
 private fun hasPermission(context: Context, permission: String): Boolean =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
-private fun statusModelLabel(): String = "local-mlp-0.1"

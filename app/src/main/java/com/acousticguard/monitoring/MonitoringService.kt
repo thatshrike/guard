@@ -14,9 +14,12 @@ import androidx.core.app.ServiceCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.acousticguard.dispatch.DispatchCoordinator
+import com.acousticguard.ml.AudioRecordFactory
 import com.acousticguard.ml.AudioSignalProcessor
+import com.acousticguard.ml.DistressClassifier
 import com.acousticguard.ml.DistressFusionEngine
-import com.acousticguard.ml.YamnetDistressClassifier
+import com.acousticguard.ml.ModelInfo
+import com.acousticguard.ml.ModelSelector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,8 +39,12 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     private val motionTracker = MotionFeatureTracker()
     private val featureProcessor = AudioSignalProcessor()
     private val fusionEngine = DistressFusionEngine()
+    private val modelSelector = ModelSelector()
+    private val powerPolicy = MonitoringPowerPolicy()
+    private val metrics = DetectionMetricsTracker()
     private lateinit var dispatchCoordinator: DispatchCoordinator
     private var sensorManager: android.hardware.SensorManager? = null
+    private var motionSamplingMode: MotionSamplingMode? = null
     private var audioRecord: AudioRecord? = null
     private var inferenceJob: Job? = null
     private var pendingConfirmationJob: Job? = null
@@ -78,7 +85,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         }
 
         startAsForegroundService()
-        registerMotionSensor()
+        registerMotionSensor(MotionSamplingMode.LOW_POWER)
         if (inferenceJob?.isActive != true) startAudioLoop()
         return START_STICKY
     }
@@ -93,6 +100,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         }
         audioRecord = null
         sensorManager?.unregisterListener(this)
+        motionSamplingMode = null
         serviceScope.cancel()
         MonitoringStatusStore.reset()
         super.onDestroy()
@@ -129,15 +137,30 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         }
     }
 
-    private fun registerMotionSensor() {
+    private fun registerMotionSensor(mode: MotionSamplingMode) {
         val manager = sensorManager ?: return
         val sensor = manager.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
         if (sensor == null) {
-            MonitoringStatusStore.update { it.copy(motionReady = false, message = "Monitoring audio locally; motion sensor unavailable.") }
+            motionSamplingMode = null
+            MonitoringStatusStore.update {
+                it.copy(
+                    motionReady = false,
+                    monitoringMode = MonitoringMode.DEGRADED,
+                    message = "Monitoring audio locally; motion sensor unavailable.",
+                )
+            }
             return
         }
-        manager.registerListener(this, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
-        MonitoringStatusStore.update { it.copy(motionReady = true) }
+        if (motionSamplingMode == mode) return
+        manager.unregisterListener(this)
+        manager.registerListener(this, sensor, mode.samplingPeriodUs)
+        motionSamplingMode = mode
+        MonitoringStatusStore.update {
+            it.copy(
+                motionReady = true,
+                motionSamplingMode = mode,
+            )
+        }
     }
 
     private fun startAudioLoop() {
@@ -145,25 +168,51 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             it.copy(engineState = EngineState.STARTING, message = "Starting the local detector…")
         }
         inferenceJob = serviceScope.launch {
-            val classifier = runCatching { YamnetDistressClassifier(this@MonitoringService) }
-                .getOrElse {
+            val selection = runCatching { modelSelector.select(this@MonitoringService) }
+                .getOrElse { failure ->
                     MonitoringStatusStore.update {
-                        it.copy(engineState = EngineState.ERROR, message = "The local audio model could not be loaded.")
+                        it.copy(
+                            engineState = EngineState.ERROR,
+                            monitoringMode = MonitoringMode.DEGRADED,
+                            modelInfo = ModelInfo.UNAVAILABLE,
+                            lastModelError = failure.message,
+                            message = "The local audio models could not be loaded. Monitoring is paused.",
+                        )
                     }
                     stopSelf()
                     return@launch
                 }
+            val classifier: DistressClassifier = selection.classifier
+            metrics.reset()
+            MonitoringStatusStore.update {
+                it.copy(
+                    modelInfo = classifier.modelInfo,
+                    fallbackModelActive = selection.fallbackActive,
+                    lastModelError = selection.fallbackReason,
+                    monitoringMode = if (it.motionReady) MonitoringMode.NORMAL else MonitoringMode.DEGRADED,
+                    message = if (selection.fallbackActive) {
+                        "Monitoring locally with the verified YAMNet fallback. No audio is stored."
+                    } else {
+                        "Starting the domain-specific local detector…"
+                    },
+                )
+            }
+
             val windowSamples = classifier.requiredInputBufferSize
-            // tensorflow-lite-task-audio creates an AudioRecord configured for PCM_FLOAT.
-            // Reading that recorder into a ShortArray returns an AudioRecord error on devices
-            // that enforce the encoding, which previously surfaced as "microphone stopped
-            // unexpectedly". Keep the samples in the format used by TensorAudio.
-            val buffer = FloatArray(windowSamples)
-            val record = runCatching { classifier.createAudioRecord() }
+            val pcmBuffer = ShortArray(windowSamples)
+            val normalizedBuffer = FloatArray(windowSamples)
+            val record = runCatching {
+                AudioRecordFactory.create(classifier.sampleRateHz, classifier.requiredInputBufferSize)
+            }
                 .getOrElse {
                     classifier.close()
                     MonitoringStatusStore.update {
-                        it.copy(engineState = EngineState.ERROR, message = "The microphone could not be initialized.")
+                        it.copy(
+                            engineState = EngineState.ERROR,
+                            monitoringMode = MonitoringMode.DEGRADED,
+                            lastModelError = "The microphone could not be initialized.",
+                            message = "The microphone could not be initialized.",
+                        )
                     }
                     stopSelf()
                     return@launch
@@ -172,7 +221,12 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 record.release()
                 classifier.close()
                 MonitoringStatusStore.update {
-                    it.copy(engineState = EngineState.ERROR, message = "The microphone could not be initialized.")
+                    it.copy(
+                        engineState = EngineState.ERROR,
+                        monitoringMode = MonitoringMode.DEGRADED,
+                        lastModelError = "The microphone could not be initialized.",
+                        message = "The microphone could not be initialized.",
+                    )
                 }
                 stopSelf()
                 return@launch
@@ -180,57 +234,144 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             audioRecord = record
 
             try {
+                val scheduler = InferenceScheduler()
                 record.startRecording()
                 MonitoringStatusStore.update {
-                    it.copy(engineState = EngineState.MONITORING, message = "Monitoring locally. No audio is stored.")
+                    it.copy(
+                        engineState = EngineState.MONITORING,
+                        monitoringMode = if (it.motionReady) MonitoringMode.NORMAL else MonitoringMode.DEGRADED,
+                        message = if (selection.fallbackActive) {
+                            "Monitoring locally with the verified YAMNet fallback. No audio is stored."
+                        } else {
+                            "Monitoring locally. No audio is stored."
+                        },
+                    )
                 }
 
                 while (isActive) {
                     var filled = 0
-                    while (filled < buffer.size && isActive) {
-                        val read = record.read(buffer, filled, buffer.size - filled, AudioRecord.READ_BLOCKING)
-                        if (read <= 0) throw IllegalStateException("The microphone returned no samples.")
-                        filled += read
+                    while (filled < pcmBuffer.size && isActive) {
+                        when (val read = record.read(pcmBuffer, filled, pcmBuffer.size - filled, AudioRecord.READ_BLOCKING)) {
+                            in 1..Int.MAX_VALUE -> filled += read
+                            0 -> delay(10L)
+                            else -> throw IllegalStateException("AudioRecord read failed with code $read.")
+                        }
                     }
                     if (!isActive) break
+                    metrics.recordAudioWindowRead()
+
+                    for (index in normalizedBuffer.indices) {
+                        normalizedBuffer[index] = pcmBuffer[index] / PCM_SCALE
+                    }
 
                     val motion = motionTracker.snapshot()
-                    val features = featureProcessor.extract(buffer, buffer.size, motion)
-                    val inference = classifier.infer(buffer, motion, features)
-                    val decision = fusionEngine.update(inference, motion, System.currentTimeMillis())
+                    val features = featureProcessor.extract(normalizedBuffer, normalizedBuffer.size, motion)
+                    val nowMs = System.currentTimeMillis()
+                    updateMotionSamplingMode(features, motion)
+                    val shouldRunModel = scheduler.shouldRunImmediately(features, motion) ||
+                        scheduler.quietScanDue(nowMs) ||
+                        scheduler.previousResultWasUncertain()
 
-                    if (decision?.confirmed == true) {
-                        beginConfirmationCountdown(decision, inference.modelVersion)
-                    } else {
-                        MonitoringStatusStore.update {
-                            it.copy(
+                    if (!shouldRunModel) {
+                        metrics.recordSkippedModelInvocation()
+                        MonitoringStatusStore.update { status ->
+                            status.copy(
                                 engineState = EngineState.MONITORING,
-                                lastConfidence = maxOf(
-                                    inference.screamProbability,
-                                    inference.respiratoryProbability,
-                                    inference.impactProbability,
-                                ),
-                                message = "Listening in volatile memory. Awaiting corroboration.",
+                                monitoringMode = if (status.motionReady) MonitoringMode.LOW_POWER else MonitoringMode.DEGRADED,
+                                motionSamplingMode = motionSamplingMode ?: MotionSamplingMode.LOW_POWER,
+                                detectionMetrics = metrics.snapshot(),
+                                message = "Low-power local scan active. Awaiting a candidate event.",
                             )
+                        }
+                    } else {
+                        val inferenceStartedAt = System.nanoTime()
+                        val inference = classifier.infer(normalizedBuffer, motion, features)
+                        val latencyMs = (System.nanoTime() - inferenceStartedAt)
+                            .coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+                        metrics.recordModelInvocation(latencyMs, classifier.modelInfo.modelVersion)
+                        scheduler.recordInference(nowMs, inference)
+                        val decision = fusionEngine.update(inference, motion, nowMs)
+
+                        if (decision?.confirmed == true) {
+                            beginConfirmationCountdown(decision, classifier.modelInfo.modelVersion)
+                        } else if (decision != null) {
+                            MonitoringStatusStore.update { status ->
+                                status.copy(
+                                    engineState = EngineState.MONITORING,
+                                    monitoringMode = if (status.motionReady) MonitoringMode.NORMAL else MonitoringMode.DEGRADED,
+                                    motionSamplingMode = motionSamplingMode ?: MotionSamplingMode.LOW_POWER,
+                                    lastMarker = decision.marker,
+                                    lastConfidence = decision.confidence,
+                                    detectionMetrics = metrics.snapshot(),
+                                    message = "Potential ${decision.marker.label.lowercase()} detected (${(decision.confidence * 100).toInt()}%). Awaiting corroboration.",
+                                )
+                            }
+                        } else {
+                            MonitoringStatusStore.update { status ->
+                                status.copy(
+                                    engineState = EngineState.MONITORING,
+                                    monitoringMode = if (status.motionReady) MonitoringMode.NORMAL else MonitoringMode.DEGRADED,
+                                    motionSamplingMode = motionSamplingMode ?: MotionSamplingMode.LOW_POWER,
+                                    lastConfidence = maxOf(
+                                        inference.screamProbability,
+                                        inference.respiratoryProbability,
+                                        inference.impactProbability,
+                                    ),
+                                    detectionMetrics = metrics.snapshot(),
+                                    message = if (inference.uncertainty >= UNCERTAIN_RESULT_THRESHOLD) {
+                                        "The local model was uncertain; no event was advanced."
+                                    } else {
+                                        "Listening in volatile memory. Awaiting corroboration."
+                                    },
+                                )
+                            }
                         }
                     }
 
                     // Make the temporary PCM window eligible for collection without retaining audio.
-                    buffer.fill(0f)
+                    pcmBuffer.fill(0)
+                    normalizedBuffer.fill(0f)
                 }
             } catch (_: SecurityException) {
-                MonitoringStatusStore.update { it.copy(engineState = EngineState.BLOCKED, message = "Microphone permission was revoked.") }
+                MonitoringStatusStore.update {
+                    it.copy(
+                        engineState = EngineState.BLOCKED,
+                        monitoringMode = MonitoringMode.DEGRADED,
+                        detectionMetrics = metrics.snapshot(),
+                        message = "Microphone permission was revoked.",
+                    )
+                }
             } catch (_: IllegalStateException) {
-                MonitoringStatusStore.update { it.copy(engineState = EngineState.ERROR, message = "The microphone stopped unexpectedly.") }
+                metrics.recordDroppedWindow()
+                MonitoringStatusStore.update {
+                    it.copy(
+                        engineState = EngineState.ERROR,
+                        monitoringMode = MonitoringMode.DEGRADED,
+                        detectionMetrics = metrics.snapshot(),
+                        message = "Microphone input stopped. Toggle monitoring off and on to retry.",
+                    )
+                }
             } finally {
                 runCatching { record.stop() }
                 record.release()
                 classifier.close()
                 audioRecord = null
-                buffer.fill(0f)
+                pcmBuffer.fill(0)
+                normalizedBuffer.fill(0f)
                 inferenceJob = null
             }
         }
+    }
+
+    private fun updateMotionSamplingMode(
+        features: com.acousticguard.ml.AcousticFeatureVector,
+        motion: com.acousticguard.ml.MotionSnapshot,
+    ) {
+        if (motionSamplingMode == null && MonitoringStatusStore.state.value.motionReady) {
+            registerMotionSensor(MotionSamplingMode.LOW_POWER)
+        }
+        val desiredMode = powerPolicy.modeFor(features, motion)
+        if (desiredMode != motionSamplingMode) registerMotionSensor(desiredMode)
     }
 
     private fun beginConfirmationCountdown(
@@ -366,5 +507,8 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         const val PENDING_ALERT_NOTIFICATION_ID = 3103
         const val COUNTDOWN_SECONDS = 10
         const val MONITORING_NOTIFICATION_ID = 3100
+        const val PCM_SCALE = 32768f
+        const val NANOS_PER_MILLISECOND = 1_000_000L
+        const val UNCERTAIN_RESULT_THRESHOLD = 0.85f
     }
 }

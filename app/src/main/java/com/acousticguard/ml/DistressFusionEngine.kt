@@ -1,7 +1,5 @@
 package com.acousticguard.ml
 
-import kotlin.math.max
-
 /**
  * Converts local model scores into a fail-closed decision.
  * A single loud sound never dispatches. The same marker must be corroborated across multiple
@@ -48,44 +46,50 @@ class DistressFusionEngine(
         inference: DistressInference,
         motion: MotionSnapshot,
     ): FusionDecision? {
-        val candidates = buildList {
-            if (inference.screamProbability >= SCREAM_THRESHOLD &&
-                (motion.energy >= 0.16f || inference.screamProbability >= 0.93f)
-            ) {
-                add(
-                    FusionDecision(
-                        marker = DistressMarker.SCREAM,
-                        riskScore = max(inference.screamProbability, motion.energy),
-                        confidence = inference.screamProbability,
-                        rationale = "Vocal friction and inertial corroboration",
-                    ),
-                )
-            }
-            if (inference.respiratoryProbability >= RESPIRATORY_THRESHOLD &&
-                (motion.energy >= 0.08f || inference.respiratoryProbability >= 0.94f)
-            ) {
-                add(
-                    FusionDecision(
-                        marker = DistressMarker.RESPIRATORY,
-                        riskScore = inference.respiratoryProbability,
-                        confidence = inference.respiratoryProbability,
-                        rationale = "Respiratory pattern sustained across local windows",
-                    ),
-                )
-            }
-            if (inference.impactProbability >= IMPACT_THRESHOLD && motion.jerk >= IMPACT_JERK_THRESHOLD) {
-                add(
-                    FusionDecision(
-                        marker = DistressMarker.IMPACT,
-                        riskScore = (inference.impactProbability + motion.jerk) / 2f,
-                        confidence = inference.impactProbability,
-                        rationale = "Acoustic transient and inertial impulse corroboration",
-                    ),
-                )
-            }
+        if (inference.uncertainty >= MAX_ACCEPTED_UNCERTAINTY ||
+            inference.audioQuality < MIN_ACCEPTED_AUDIO_QUALITY
+        ) {
+            return null
         }
-        return candidates.maxByOrNull { it.riskScore }
+
+        var strongest: FusionDecision? = null
+
+        // Vocal distress is already corroborated by the acoustic model plus the sustained
+        // multi-window streak below. Do not require the phone to move: a person can shout for
+        // help while the device is on a table, in a pocket, or held completely still.
+        if (inference.screamProbability >= SCREAM_THRESHOLD) {
+            strongest = FusionDecision(
+                marker = DistressMarker.SCREAM,
+                riskScore = inference.screamProbability,
+                confidence = inference.screamProbability,
+                rationale = "Sustained vocal distress detected acoustically",
+            )
+        }
+        if (inference.respiratoryProbability >= RESPIRATORY_THRESHOLD &&
+            (motion.energy >= 0.08f || inference.respiratoryProbability >= 0.94f)
+        ) {
+            val respiratory = FusionDecision(
+                marker = DistressMarker.RESPIRATORY,
+                riskScore = inference.respiratoryProbability,
+                confidence = inference.respiratoryProbability,
+                rationale = "Respiratory pattern sustained across local windows",
+            )
+            if (isStronger(strongest, respiratory)) strongest = respiratory
+        }
+        if (inference.impactProbability >= IMPACT_THRESHOLD && motion.jerk >= IMPACT_JERK_THRESHOLD) {
+            val impact = FusionDecision(
+                marker = DistressMarker.IMPACT,
+                riskScore = (inference.impactProbability + motion.jerk) / 2f,
+                confidence = inference.impactProbability,
+                rationale = "Acoustic transient and inertial impulse corroboration",
+            )
+            if (isStronger(strongest, impact)) strongest = impact
+        }
+        return strongest
     }
+
+    private fun isStronger(current: FusionDecision?, candidate: FusionDecision): Boolean =
+        current == null || candidate.riskScore > current.riskScore
 
     private fun decay(nowMs: Long) {
         streaks.entries.removeIf { nowMs - it.value.lastAt > confirmationWindowMs }
@@ -94,10 +98,12 @@ class DistressFusionEngine(
     private data class MarkerStreak(val count: Int, val lastAt: Long)
 
     private companion object {
-        const val SCREAM_THRESHOLD = 0.78f
+        const val SCREAM_THRESHOLD = 0.72f
         const val RESPIRATORY_THRESHOLD = 0.80f
         const val IMPACT_THRESHOLD = 0.74f
         const val IMPACT_JERK_THRESHOLD = 0.42f
+        const val MAX_ACCEPTED_UNCERTAINTY = 0.85f
+        const val MIN_ACCEPTED_AUDIO_QUALITY = 0.10f
     }
 }
 

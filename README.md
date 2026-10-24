@@ -1,6 +1,6 @@
 # AcousticGuard
 
-AcousticGuard is a native Android application for zero-touch, on-device distress-pattern detection. It processes short microphone windows in RAM, runs a bundled pretrained YAMNet TensorFlow Lite model locally, correlates audio labels with inertial motion, and requires repeated corroboration before starting a visible cancellation countdown.
+AcousticGuard is a native Android application for zero-touch, on-device distress-pattern detection. It processes short microphone windows in RAM, uses cheap DSP and motion features to gate a small local model, correlates scores with inertial motion, and requires repeated corroboration before starting a visible cancellation countdown.
 
 The repository is now compile-ready: it includes the Gradle wrapper, Android SDK configuration, the on-device model asset, unit tests, lint configuration, encrypted outbox, optional user-owned HTTPS receiver, and a debug APK build path.
 
@@ -9,22 +9,31 @@ The repository is now compile-ready: it includes the Gradle wrapper, Android SDK
 1. Open AcousticGuard and review the privacy explanation.
 2. Enable monitoring and grant microphone + notification permissions.
 3. The app starts a microphone foreground service with an ongoing status notification.
-4. YAMNet classifies the short audio window locally. Only scalar label scores and DSP features leave the audio buffer.
-5. Motion corroboration and `DistressFusionEngine` require repeated qualifying windows.
-6. A 10-second visible notification countdown appears with a **Cancel** action.
-7. If not cancelled, only bounded metadata is written to the encrypted Android Keystore-backed outbox.
-8. Remote delivery is optional and off by default. When explicitly enabled, the app encrypts the metadata for a user-owned HTTPS receiver and retries through WorkManager.
+4. A low-cost DSP/motion gate decides whether the model needs to run. When it does, the active classifier processes the short audio window locally. Only scalar scores and features leave the audio buffer.
+5. The local detector recognizes scream/shout and loud speech acoustically, so shouted distress
+   in English, Hindi, or another language follows the same language-independent path. Motion is
+   still used for impact corroboration, while vocal distress can trigger with the phone still.
+6. `DistressFusionEngine` requires repeated qualifying windows.
+7. A 10-second visible notification countdown appears with a **Cancel** action.
+8. If not cancelled, only bounded metadata is written to the encrypted Android Keystore-backed outbox.
+9. Remote delivery is optional and off by default. When explicitly enabled, the app encrypts the metadata for a user-owned HTTPS receiver and retries through WorkManager.
 
 ## Machine-learning implementation
 
-- `app/src/main/assets/yamnet.tflite` is the official TensorFlow Lite Task Audio YAMNet AudioSet classifier artifact.
-- `YamnetDistressClassifier.kt` invokes the model on-device through `tensorflow-lite-task-audio`.
+- `ModelSelector.kt` prefers the optional domain-specific INT8 TinyML model and falls back to the verified YAMNet AudioSet artifact when the student asset is absent or fails its manifest/integrity contract.
+- `TinyDistressClassifier.kt` defines the `logmel64x32+motion-v1` input contract and uses one TFLite interpreter thread. The trained student model is intentionally not fabricated in source control; it must come from the private, reviewed training pipeline before it can become the primary model.
+- `app/src/main/assets/yamnet.tflite` is the verified TensorFlow Lite Task Audio YAMNet AudioSet fallback artifact.
+- `YamnetDistressClassifier.kt` invokes YAMNet on-device through `tensorflow-lite-task-audio`.
 - `YamnetLabelMapper.kt` allow-lists the AudioSet labels relevant to this product: screaming/shouting, breathing/gasping, and acoustic impact labels.
 - `AudioSignalProcessor.kt` adds loudness, high-frequency energy, spectral flux, crest factor, silence, and envelope features.
+- `InferenceScheduler.kt` skips most quiet-state model calls while retaining a periodic quiet scan and an uncertainty-triggered retry path.
+- `DetectionMetricsTracker.kt` keeps only aggregate in-memory counters and latency percentiles for debug/operational visibility.
 - `MotionFeatureTracker.kt` derives inertial energy and jerk from the accelerometer.
 - `DistressFusionEngine.kt` is fail-closed: a single sound is never enough, impact requires inertial jerk, and confirmations are rate-limited.
 
-Model provenance and the bundled SHA-256 are recorded in `app/src/main/assets/yamnet_model_manifest.json`. See `docs/MODEL.md` for replacement and validation guidance.
+Model provenance and the bundled SHA-256 are recorded in `app/src/main/assets/yamnet_model_manifest.json`. The expected student-model manifest is documented in `docs/MODEL.md`; model selection fails visibly if neither model can load. See that document for replacement, calibration, and fallback guidance.
+
+The repeatable power and latency comparison plan is in `docs/BATTERY_BENCHMARK.md`.
 
 ## Privacy and storage guarantees
 
@@ -40,7 +49,7 @@ Model provenance and the bundled SHA-256 are recorded in `app/src/main/assets/ya
 ```text
 app/src/main/java/com/acousticguard/
 ├── dispatch/       Encrypted outbox, hybrid envelope, WorkManager transport
-├── ml/             YAMNet adapter, label mapping, DSP features, fusion policy
+├── ml/             TinyML/YAMNet adapters, manifests, DSP features, fusion policy
 ├── monitoring/     Foreground microphone service, countdown, motion tracking
 └── ui/             Compose screens, permissions, dispatch settings, theme tokens
 ```
@@ -88,6 +97,10 @@ Settings supports an explicit user-owned receiver configuration:
 - Optional bearer token
 
 The receiver must decrypt the documented envelope and deduplicate by `Idempotency-Key`. A 2xx response means only that the configured receiver accepted the encrypted request; it is not proof of emergency-service delivery. The complete receiver contract is in `docs/DISPATCH.md`.
+
+## Battery and model-validation boundary
+
+The scheduler and motion policy are instrumentation foundations, not proof of a battery target. Record device-specific battery, CPU, thermal, latency, dropped-window, false-alert, and missed-event measurements before changing the production model or thresholds. Do not enable shadow YAMNet plus student inference continuously in a normal build because that doubles model work.
 
 ## Safety boundary
 
