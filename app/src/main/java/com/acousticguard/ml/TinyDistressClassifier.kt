@@ -44,18 +44,15 @@ class TinyDistressClassifier(context: Context) : DistressClassifier {
             expectedRuntime = "tflite",
             expectedQuantization = "int8",
         )
-        require(manifest.sampleRateHz == MODEL_SAMPLE_RATE) {
-            "The student model sample-rate contract is not 16 kHz."
-        }
-        require(manifest.windowMs == MODEL_WINDOW_MS) {
-            "The student model window contract is not one second."
-        }
-        require(manifest.inputContract == INPUT_CONTRACT) {
-            "The student model input contract is unsupported."
-        }
-        require(manifest.outputs == OUTPUT_LABELS) {
-            "The student model output labels do not match the classifier contract."
-        }
+        manifest.validateStudentContract(
+            expectedModelVersion = MODEL_VERSION,
+            expectedRuntime = "tflite",
+            expectedQuantization = "int8",
+            expectedSampleRateHz = MODEL_SAMPLE_RATE,
+            expectedWindowMs = MODEL_WINDOW_MS,
+            expectedInputContract = INPUT_CONTRACT,
+            expectedOutputs = OUTPUT_LABELS,
+        )
 
         val modelBytes = context.assets.open(MODEL_ASSET).use { it.readBytes() }
         val modelBuffer = ByteBuffer.allocateDirect(modelBytes.size)
@@ -70,11 +67,11 @@ class TinyDistressClassifier(context: Context) : DistressClassifier {
         interpreter.allocateTensors()
         val inputTensor = interpreter.getInputTensor(0)
         val outputTensor = interpreter.getOutputTensor(0)
-        require(inputTensor.numElements() == INPUT_FEATURE_COUNT) {
-            "The student model input does not contain $INPUT_FEATURE_COUNT values."
+        require(inputTensor.shape().contentEquals(INPUT_SHAPE)) {
+            "The student model input shape does not match ${INPUT_SHAPE.contentToString()}."
         }
-        require(outputTensor.numElements() == OUTPUT_COUNT) {
-            "The student model must emit exactly $OUTPUT_COUNT class scores."
+        require(outputTensor.shape().contentEquals(OUTPUT_SHAPE)) {
+            "The student model output shape does not match ${OUTPUT_SHAPE.contentToString()}."
         }
 
         inputType = inputTensor.dataType()
@@ -84,26 +81,26 @@ class TinyDistressClassifier(context: Context) : DistressClassifier {
         outputScale = outputTensor.quantizationParams().scale
         outputZeroPoint = outputTensor.quantizationParams().zeroPoint
 
-        require(inputType == DataType.INT8 || inputType == DataType.UINT8 || inputType == DataType.FLOAT32) {
-            "The student model input type is unsupported: $inputType."
+        require(inputType == DataType.INT8) {
+            "The student model input must use full-integer INT8 quantization: $inputType."
         }
-        require(outputType == DataType.INT8 || outputType == DataType.UINT8 || outputType == DataType.FLOAT32) {
-            "The student model output type is unsupported: $outputType."
+        require(outputType == DataType.INT8) {
+            "The student model output must use full-integer INT8 quantization: $outputType."
         }
-        if (inputType != DataType.FLOAT32) require(inputScale > 0f) {
+        require(inputScale > 0f) {
             "The student model input quantization scale is invalid."
         }
-        if (outputType != DataType.FLOAT32) require(outputScale > 0f) {
+        require(outputScale > 0f) {
             "The student model output quantization scale is invalid."
         }
 
         inputTarget = when (inputType) {
-            DataType.FLOAT32 -> FloatArray(INPUT_FEATURE_COUNT)
-            else -> ByteArray(INPUT_FEATURE_COUNT)
+            DataType.INT8 -> ByteArray(INPUT_FEATURE_COUNT)
+            else -> error("Unsupported input type after validation: $inputType")
         }
         outputTarget = when (outputType) {
-            DataType.FLOAT32 -> FloatArray(OUTPUT_COUNT)
-            else -> ByteArray(OUTPUT_COUNT)
+            DataType.INT8 -> ByteArray(OUTPUT_COUNT)
+            else -> error("Unsupported output type after validation: $outputType")
         }
         modelInfo = ModelInfo(
             modelVersion = manifest.modelVersion,
@@ -241,6 +238,8 @@ class TinyDistressClassifier(context: Context) : DistressClassifier {
         const val INPUT_CONTRACT = "logmel64x32+motion-v1"
         const val INPUT_FEATURE_COUNT = 64 * 32 + 2
         const val OUTPUT_COUNT = 4
+        val INPUT_SHAPE = intArrayOf(1, INPUT_FEATURE_COUNT)
+        val OUTPUT_SHAPE = intArrayOf(1, OUTPUT_COUNT)
         val OUTPUT_LABELS = listOf("normal", "scream", "respiratory", "impact")
     }
 }

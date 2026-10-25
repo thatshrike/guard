@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -162,13 +163,18 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
                     onToggleMonitoring = ::toggleMonitoring,
                     onOpenSafety = { selectedTab = 1 },
                 )
-                1 -> SafetyScreen(status = status, onOpenSettings = { selectedTab = 2 })
+                1 -> SafetyScreen(
+                    status = status,
+                    dispatchUi = dispatchUi,
+                    onOpenSettings = { selectedTab = 2 },
+                )
                 else -> SettingsScreen(
                     status = status,
                     dispatchUi = dispatchUi,
                     onRequestPermissions = { permissionLauncher.launch(requiredPermissions()) },
                     onSaveDispatchSettings = viewModel::saveDispatchSettings,
                     onClearDispatchQueue = viewModel::clearDispatchQueue,
+                    onQueueTestEvent = viewModel::queueTestEvent,
                 )
             }
         }
@@ -404,7 +410,11 @@ private fun PrivacyCard(onOpenSafety: () -> Unit) {
 }
 
 @Composable
-private fun SafetyScreen(status: MonitoringStatus, onOpenSettings: () -> Unit) {
+private fun SafetyScreen(
+    status: MonitoringStatus,
+    dispatchUi: DispatchUiState,
+    onOpenSettings: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 28.dp),
@@ -441,7 +451,11 @@ private fun SafetyScreen(status: MonitoringStatus, onOpenSettings: () -> Unit) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Confirmed event metadata is encrypted with Android Keystore before it enters the local queue. No network transport is enabled in this first build.",
+                        if (dispatchUi.settings.enabled) {
+                            "Confirmed metadata is encrypted before delivery to your configured HTTPS receiver. Receiver acceptance is not emergency-service response."
+                        } else {
+                            "Confirmed event metadata is encrypted with Android Keystore and kept local-only until you explicitly enable a receiver."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -467,7 +481,7 @@ private fun SafetyPolicyCard() {
         "Audio is processed in RAM and cleared after each window.",
         "The local neural network emits probabilities, not recordings.",
         "Inertial motion corroborates acoustic anomalies before confirmation.",
-        "Confirmed metadata is encrypted locally for future dispatch integration.",
+        "Confirmed metadata is encrypted locally; optional receiver delivery is separate from emergency services.",
     )
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -578,6 +592,7 @@ private fun SettingsScreen(
     onRequestPermissions: () -> Unit,
     onSaveDispatchSettings: (DispatchSettings) -> Unit,
     onClearDispatchQueue: () -> Unit,
+    onQueueTestEvent: () -> Unit,
 ) {
     val context = LocalContext.current
     val microphoneGranted = hasPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -644,10 +659,11 @@ private fun SettingsScreen(
         }
         item {
             DispatchSettingsCard(
-                state = dispatchUi,
-                onSave = onSaveDispatchSettings,
-                onClearQueue = onClearDispatchQueue,
-            )
+                    state = dispatchUi,
+                    onSave = onSaveDispatchSettings,
+                    onClearQueue = onClearDispatchQueue,
+                    onQueueTestEvent = onQueueTestEvent,
+                )
         }
         item {
             Surface(
@@ -672,7 +688,10 @@ private fun SettingsScreen(
                         value = if (status.fallbackModelActive) "Yes" else "No",
                     )
                     SettingRow(label = "Audio retention", value = "None")
-                    SettingRow(label = "Network transport", value = "Disabled")
+                    SettingRow(
+                        label = "Network transport",
+                        value = if (dispatchUi.settings.enabled) "Enabled for new events" else "Disabled · local-only",
+                    )
                     SettingRow(label = "Motion corroboration", value = if (status.motionReady) "Available" else "Standby")
                     status.lastModelError?.let { error ->
                         Spacer(modifier = Modifier.height(8.dp))
@@ -687,7 +706,7 @@ private fun SettingsScreen(
         }
         item {
             Text(
-                "AcousticGuard does not create an account, sync recordings, or use a cloud model. A future dispatch adapter can be added without changing the local detector contract.",
+                "AcousticGuard does not create an account, sync recordings, or use a cloud model. Optional receiver delivery sends encrypted metadata only; it is not a direct emergency-service connection.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -701,11 +720,13 @@ private fun DispatchSettingsCard(
     state: DispatchUiState,
     onSave: (DispatchSettings) -> Unit,
     onClearQueue: () -> Unit,
+    onQueueTestEvent: () -> Unit,
 ) {
     var enabled by remember(state.settings.enabled) { mutableStateOf(state.settings.enabled) }
     var endpoint by remember(state.settings.endpoint) { mutableStateOf(state.settings.endpoint) }
     var publicKeyPem by remember(state.settings.publicKeyPem) { mutableStateOf(state.settings.publicKeyPem) }
     var bearerToken by remember(state.settings.bearerToken) { mutableStateOf(state.settings.bearerToken) }
+    var showTestDialog by rememberSaveable { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -782,6 +803,14 @@ private fun DispatchSettingsCard(
             ) {
                 Text(if (state.saving) "Saving…" else "Save delivery settings")
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { showTestDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.saving,
+            ) {
+                Text(if (state.settings.enabled) "Send a test event" else "Queue a local test event")
+            }
             state.message?.let { message ->
                 Spacer(modifier = Modifier.height(10.dp))
                 InlineNotice(message = message, isError = state.snapshot.error != null)
@@ -807,6 +836,37 @@ private fun DispatchSettingsCard(
                 }
             }
         }
+    }
+
+    if (showTestDialog) {
+        AlertDialog(
+            onDismissRequest = { showTestDialog = false },
+            title = { Text("Confirm test event") },
+            text = {
+                Text(
+                    if (state.settings.enabled) {
+                        "This sends encrypted test metadata to your configured receiver. It does not contact emergency services. Continue?"
+                    } else {
+                        "Remote delivery is disabled, so this test will remain local-only. Continue?"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showTestDialog = false
+                        onQueueTestEvent()
+                    },
+                ) {
+                    Text("Confirm")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTestDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

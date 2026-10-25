@@ -45,4 +45,50 @@ class TinyModelManifestTest {
 
         assertTrue(runCatching { manifest.validate() }.isFailure)
     }
+
+    @Test
+    fun studentContractRequiresDatasetCalibrationAndLimitationsMetadata() {
+        val manifest = ModelManifest(
+            artifact = "distress_student_int8.tflite",
+            modelVersion = "distress-student-int8-1",
+            sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            runtime = "tflite",
+            quantization = "int8",
+            sampleRateHz = 16_000,
+            windowMs = 1_000,
+            inputContract = "logmel64x32+motion-v1",
+            preprocessingVersion = "logmel64x32+motion-v1",
+            datasetRevision = "dataset-test-1",
+            calibrationRevision = "calibration-test-1",
+            license = "internal",
+            limitations = "Not validated for emergency response.",
+            thresholdPolicyRevision = "fusion-v1",
+            outputs = listOf("normal", "scream", "respiratory", "impact"),
+            intendedUse = "Controlled validation only.",
+        )
+
+        manifest.validateStudentContract(
+            expectedModelVersion = "distress-student-int8-1",
+            expectedRuntime = "tflite",
+            expectedQuantization = "int8",
+            expectedSampleRateHz = 16_000,
+            expectedWindowMs = 1_000,
+            expectedInputContract = "logmel64x32+motion-v1",
+            expectedOutputs = listOf("normal", "scream", "respiratory", "impact"),
+        )
+
+        assertTrue(
+            runCatching {
+                manifest.copy(datasetRevision = null).validateStudentContract(
+                    expectedModelVersion = "distress-student-int8-1",
+                    expectedRuntime = "tflite",
+                    expectedQuantization = "int8",
+                    expectedSampleRateHz = 16_000,
+                    expectedWindowMs = 1_000,
+                    expectedInputContract = "logmel64x32+motion-v1",
+                    expectedOutputs = listOf("normal", "scream", "respiratory", "impact"),
+                )
+            }.isFailure,
+        )
+    }
 }

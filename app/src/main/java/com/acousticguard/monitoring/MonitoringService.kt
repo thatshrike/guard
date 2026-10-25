@@ -15,9 +15,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.acousticguard.dispatch.DispatchCoordinator
 import com.acousticguard.ml.AudioRecordFactory
-import com.acousticguard.ml.AudioSignalProcessor
 import com.acousticguard.ml.DistressClassifier
 import com.acousticguard.ml.DistressFusionEngine
+import com.acousticguard.ml.DetectionPolicy
+import com.acousticguard.ml.DetectionPolicyAssets
 import com.acousticguard.ml.ModelInfo
 import com.acousticguard.ml.ModelSelector
 import kotlinx.coroutines.CoroutineScope
@@ -37,11 +38,10 @@ import kotlinx.coroutines.delay
 class MonitoringService : Service(), android.hardware.SensorEventListener {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val motionTracker = MotionFeatureTracker()
-    private val featureProcessor = AudioSignalProcessor()
-    private val fusionEngine = DistressFusionEngine()
     private val modelSelector = ModelSelector()
     private val powerPolicy = MonitoringPowerPolicy()
     private val metrics = DetectionMetricsTracker()
+    private var activePolicy = DetectionPolicy.CURRENT
     private lateinit var dispatchCoordinator: DispatchCoordinator
     private var sensorManager: android.hardware.SensorManager? = null
     private var motionSamplingMode: MotionSamplingMode? = null
@@ -84,7 +84,17 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             return START_NOT_STICKY
         }
 
-        startAsForegroundService()
+        if (runCatching { startAsForegroundService() }.isFailure) {
+            MonitoringStatusStore.update {
+                it.copy(
+                    engineState = EngineState.ERROR,
+                    monitoringMode = MonitoringMode.DEGRADED,
+                    message = "The monitoring notification could not be started. Monitoring is paused.",
+                )
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
         registerMotionSensor(MotionSamplingMode.LOW_POWER)
         if (inferenceJob?.isActive != true) startAudioLoop()
         return START_STICKY
@@ -137,8 +147,19 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         }
     }
 
-    private fun registerMotionSensor(mode: MotionSamplingMode) {
-        val manager = sensorManager ?: return
+    private fun registerMotionSensor(mode: MotionSamplingMode): Boolean {
+        val manager = sensorManager
+        if (manager == null) {
+            motionSamplingMode = null
+            MonitoringStatusStore.update {
+                it.copy(
+                    motionReady = false,
+                    monitoringMode = MonitoringMode.DEGRADED,
+                    message = "Monitoring audio locally; motion services are unavailable.",
+                )
+            }
+            return false
+        }
         val sensor = manager.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
         if (sensor == null) {
             motionSamplingMode = null
@@ -149,11 +170,24 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     message = "Monitoring audio locally; motion sensor unavailable.",
                 )
             }
-            return
+            return false
         }
-        if (motionSamplingMode == mode) return
+        if (motionSamplingMode == mode) return true
         manager.unregisterListener(this)
-        manager.registerListener(this, sensor, mode.samplingPeriodUs)
+        val registered = runCatching {
+            manager.registerListener(this, sensor, mode.samplingPeriodUs)
+        }.getOrDefault(false)
+        if (!registered) {
+            motionSamplingMode = null
+            MonitoringStatusStore.update {
+                it.copy(
+                    motionReady = false,
+                    monitoringMode = MonitoringMode.DEGRADED,
+                    message = "Monitoring audio locally; motion sampling could not be started.",
+                )
+            }
+            return false
+        }
         motionSamplingMode = mode
         MonitoringStatusStore.update {
             it.copy(
@@ -161,6 +195,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 motionSamplingMode = mode,
             )
         }
+        return true
     }
 
     private fun startAudioLoop() {
@@ -181,8 +216,24 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     }
                     stopSelf()
                     return@launch
-                }
+            }
             val classifier: DistressClassifier = selection.classifier
+            val policy = runCatching {
+                DetectionPolicyAssets.load(this@MonitoringService)
+            }.getOrElse { failure ->
+                classifier.close()
+                MonitoringStatusStore.update {
+                    it.copy(
+                        engineState = EngineState.ERROR,
+                        monitoringMode = MonitoringMode.DEGRADED,
+                        lastModelError = failure.message,
+                        message = "The detection policy could not be verified. Monitoring is paused.",
+                    )
+                }
+                stopSelf()
+                return@launch
+            }
+            activePolicy = policy
             metrics.reset()
             MonitoringStatusStore.update {
                 it.copy(
@@ -232,9 +283,12 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 return@launch
             }
             audioRecord = record
+            val pipeline = DetectionPipeline(
+                classifier = classifier,
+                fusionEngine = DistressFusionEngine(policy),
+            )
 
             try {
-                val scheduler = InferenceScheduler()
                 record.startRecording()
                 MonitoringStatusStore.update {
                     it.copy(
@@ -265,14 +319,10 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     }
 
                     val motion = motionTracker.snapshot()
-                    val features = featureProcessor.extract(normalizedBuffer, normalizedBuffer.size, motion)
-                    val nowMs = System.currentTimeMillis()
-                    updateMotionSamplingMode(features, motion)
-                    val shouldRunModel = scheduler.shouldRunImmediately(features, motion) ||
-                        scheduler.quietScanDue(nowMs) ||
-                        scheduler.previousResultWasUncertain()
+                    val pipelineResult = pipeline.process(normalizedBuffer, motion)
+                    updateMotionSamplingMode(pipelineResult.features, motion)
 
-                    if (!shouldRunModel) {
+                    if (!pipelineResult.modelInvoked) {
                         metrics.recordSkippedModelInvocation()
                         MonitoringStatusStore.update { status ->
                             status.copy(
@@ -284,13 +334,9 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                             )
                         }
                     } else {
-                        val inferenceStartedAt = System.nanoTime()
-                        val inference = classifier.infer(normalizedBuffer, motion, features)
-                        val latencyMs = (System.nanoTime() - inferenceStartedAt)
-                            .coerceAtLeast(0L) / NANOS_PER_MILLISECOND
-                        metrics.recordModelInvocation(latencyMs, classifier.modelInfo.modelVersion)
-                        scheduler.recordInference(nowMs, inference)
-                        val decision = fusionEngine.update(inference, motion, nowMs)
+                        val inference = requireNotNull(pipelineResult.inference)
+                        metrics.recordModelInvocation(pipelineResult.modelLatencyMs, classifier.modelInfo.modelVersion)
+                        val decision = pipelineResult.decision
 
                         if (decision?.confirmed == true) {
                             beginConfirmationCountdown(decision, classifier.modelInfo.modelVersion)
@@ -318,7 +364,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                                         inference.impactProbability,
                                     ),
                                     detectionMetrics = metrics.snapshot(),
-                                    message = if (inference.uncertainty >= UNCERTAIN_RESULT_THRESHOLD) {
+                                    message = if (inference.uncertainty >= activePolicy.uncertaintyThreshold) {
                                         "The local model was uncertain; no event was advanced."
                                     } else {
                                         "Listening in volatile memory. Awaiting corroboration."
@@ -341,20 +387,41 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "Microphone permission was revoked.",
                     )
                 }
-            } catch (_: IllegalStateException) {
+            } catch (failure: IllegalStateException) {
                 metrics.recordDroppedWindow()
+                val detail = failure.message
+                    ?.lineSequence()
+                    ?.firstOrNull()
+                    ?.take(160)
+                    ?: "AudioRecord became unavailable."
                 MonitoringStatusStore.update {
                     it.copy(
                         engineState = EngineState.ERROR,
                         monitoringMode = MonitoringMode.DEGRADED,
                         detectionMetrics = metrics.snapshot(),
-                        message = "Microphone input stopped. Toggle monitoring off and on to retry.",
+                        message = "Microphone input stopped: $detail Toggle monitoring off and on to retry.",
+                    )
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                metrics.recordDroppedWindow()
+                val detail = failure.message
+                    ?.lineSequence()
+                    ?.firstOrNull()
+                    ?.take(160)
+                    ?: failure.javaClass.simpleName
+                MonitoringStatusStore.update {
+                    it.copy(
+                        engineState = EngineState.ERROR,
+                        monitoringMode = MonitoringMode.DEGRADED,
+                        detectionMetrics = metrics.snapshot(),
+                        message = "Local monitoring stopped: $detail Toggle monitoring off and on to retry.",
                     )
                 }
             } finally {
                 runCatching { record.stop() }
                 record.release()
-                classifier.close()
+                pipeline.close()
                 audioRecord = null
                 pcmBuffer.fill(0)
                 normalizedBuffer.fill(0f)
@@ -408,7 +475,18 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "Potential ${decision.marker.label.lowercase()} detected. Automatic alert in ${remaining}s; tap Cancel if this is a false alarm.",
                     )
                 }
-                postPendingAlert(decision, remaining)
+                if (!postPendingAlert(decision, remaining)) {
+                    pendingConfirmation = null
+                    pendingConfirmationJob = null
+                    MonitoringStatusStore.update { status ->
+                        status.copy(
+                            engineState = EngineState.BLOCKED,
+                            countdownSecondsRemaining = null,
+                            message = "The cancellation notification could not be shown; the potential event was not auto-enqueued.",
+                        )
+                    }
+                    return@launch
+                }
                 delay(1_000L)
             }
 
@@ -461,8 +539,8 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     }
 
     @SuppressLint("MissingPermission")
-    private fun postPendingAlert(decision: com.acousticguard.ml.FusionDecision, secondsRemaining: Int) {
-        if (!notificationsAvailable()) return
+    private fun postPendingAlert(decision: com.acousticguard.ml.FusionDecision, secondsRemaining: Int): Boolean {
+        if (!notificationsAvailable()) return false
         val cancelIntent = Intent(this, MonitoringService::class.java).apply {
             action = ACTION_CANCEL_PENDING_ALERT
         }
@@ -483,7 +561,9 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             .setOnlyAlertOnce(true)
             .addAction(NotificationCompat.Action(0, "Cancel", cancelPendingIntent))
             .build()
-        runCatching { NotificationManagerCompat.from(this).notify(PENDING_ALERT_NOTIFICATION_ID, notification) }
+        return runCatching {
+            NotificationManagerCompat.from(this).notify(PENDING_ALERT_NOTIFICATION_ID, notification)
+        }.isSuccess
     }
 
     private fun cancelAlertNotification() {
@@ -508,7 +588,5 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         const val COUNTDOWN_SECONDS = 10
         const val MONITORING_NOTIFICATION_ID = 3100
         const val PCM_SCALE = 32768f
-        const val NANOS_PER_MILLISECOND = 1_000_000L
-        const val UNCERTAIN_RESULT_THRESHOLD = 0.85f
     }
 }

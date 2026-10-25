@@ -12,6 +12,12 @@ data class ModelManifest(
     val sampleRateHz: Int? = null,
     val windowMs: Int? = null,
     val inputContract: String? = null,
+    val preprocessingVersion: String? = null,
+    val datasetRevision: String? = null,
+    val calibrationRevision: String? = null,
+    val license: String? = null,
+    val limitations: String? = null,
+    val thresholdPolicyRevision: String? = null,
     val outputs: List<String> = emptyList(),
     val intendedUse: String = "",
 ) {
@@ -42,6 +48,55 @@ data class ModelManifest(
         }
     }
 
+    fun validateStudentContract(
+        expectedModelVersion: String,
+        expectedRuntime: String,
+        expectedQuantization: String,
+        expectedSampleRateHz: Int,
+        expectedWindowMs: Int,
+        expectedInputContract: String,
+        expectedOutputs: List<String>,
+    ) {
+        validate(
+            expectedModelVersion = expectedModelVersion,
+            expectedRuntime = expectedRuntime,
+            expectedQuantization = expectedQuantization,
+        )
+        require(sampleRateHz == expectedSampleRateHz) {
+            "The packaged model sample-rate contract is unsupported."
+        }
+        require(windowMs == expectedWindowMs) {
+            "The packaged model window contract is unsupported."
+        }
+        require(inputContract == expectedInputContract) {
+            "The packaged model input contract is unsupported."
+        }
+        require(outputs == expectedOutputs) {
+            "The packaged model output labels do not match the classifier contract."
+        }
+        require(!preprocessingVersion.isNullOrBlank()) {
+            "The student model manifest is missing its preprocessing revision."
+        }
+        require(!datasetRevision.isNullOrBlank()) {
+            "The student model manifest is missing its dataset revision."
+        }
+        require(!calibrationRevision.isNullOrBlank()) {
+            "The student model manifest is missing its calibration revision."
+        }
+        require(!license.isNullOrBlank()) {
+            "The student model manifest is missing its license."
+        }
+        require(!limitations.isNullOrBlank()) {
+            "The student model manifest is missing its limitations."
+        }
+        require(!thresholdPolicyRevision.isNullOrBlank()) {
+            "The student model manifest is missing its threshold-policy revision."
+        }
+        require(intendedUse.isNotBlank()) {
+            "The student model manifest is missing its intended use."
+        }
+    }
+
     companion object {
         fun fromJson(jsonText: String): ModelManifest {
             val json = JSONObject(jsonText)
@@ -61,6 +116,13 @@ data class ModelManifest(
                 sampleRateHz = json.optionalInt("sample_rate_hz"),
                 windowMs = json.optionalInt("window_ms"),
                 inputContract = json.optString("input_contract").takeIf { it.isNotBlank() },
+                preprocessingVersion = json.optString("preprocessing_version").takeIf { it.isNotBlank() },
+                datasetRevision = json.optString("dataset_revision").takeIf { it.isNotBlank() },
+                calibrationRevision = json.optString("calibration_revision").takeIf { it.isNotBlank() },
+                license = json.optString("license").takeIf { it.isNotBlank() },
+                limitations = json.optString("limitations").takeIf { it.isNotBlank() },
+                thresholdPolicyRevision = json.optString("threshold_policy_revision")
+                    .takeIf { it.isNotBlank() },
                 outputs = outputs,
                 intendedUse = json.optString("intended_use"),
             )

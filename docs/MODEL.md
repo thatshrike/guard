@@ -23,6 +23,11 @@ domain-specific model is active. If the student asset is present but fails its m
 tensor-shape, quantization, or output-contract checks, the app also falls back to YAMNet. If both
 models fail to load, monitoring enters an explicit error state; it is never silently disabled.
 
+The confirmation thresholds are no longer embedded only in the fusion implementation. The APK
+packages `app/src/main/assets/detection_policy_v1.json`; its SHA-256 is verified before monitoring
+starts and the immutable `DetectionPolicy` is passed into `DistressFusionEngine`. The current
+`fusion-v1` values are implementation defaults and are not evidence of calibration.
+
 ## Bundled model
 
 AcousticGuard bundles the TensorFlow Lite Task Audio YAMNet AudioSet classifier:
@@ -64,6 +69,10 @@ runtime pipelines can be tested independently:
 5. Dequantize the four output values, normalize them as probabilities, and calculate normalized
    entropy as the uncertainty estimate.
 
+The validated student adapter requires fixed `[1, 2050]` and `[1, 4]` tensor shapes and INT8 input
+and output tensors. A manifest must also record the preprocessing revision, dataset revision,
+calibration revision, license, limitations, intended use, and threshold-policy revision.
+
 The output order is fixed: `normal`, `scream`, `respiratory`, `impact`. A composite panic pattern
 is a temporal fusion result, not a directly observable neural class. A student score therefore
 cannot bypass motion corroboration for impacts, repeated-window confirmation, the ten-second
@@ -83,6 +92,14 @@ permanently suppressed, and it keeps the model active after an uncertain result.
 - last model version
 
 No PCM, spectrogram, transcript, location, or user identity is included in these metrics.
+
+## Testable detector boundary
+
+`DetectionPipeline` is the Android-independent orchestration boundary used by the foreground
+service. It accepts one normalized window and a `MotionSnapshot`, then returns features, whether
+inference ran, the inference result, and the temporal decision. `DetectionClock` and
+`ReplayAudioWindowSource` allow deterministic replay tests without a microphone, a service, or
+wall-clock sleeps.
 
 ## Replacing the model
 

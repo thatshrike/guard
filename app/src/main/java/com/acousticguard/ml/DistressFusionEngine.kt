@@ -6,9 +6,7 @@ package com.acousticguard.ml
  * short windows, and impact events also require inertial evidence.
  */
 class DistressFusionEngine(
-    private val requiredConsecutiveWindows: Int = 3,
-    private val confirmationWindowMs: Long = 8_000L,
-    private val cooldownMs: Long = 60_000L,
+    private val policy: DetectionPolicy = DetectionPolicy.CURRENT,
 ) {
     private val streaks = mutableMapOf<DistressMarker, MarkerStreak>()
     private var lastConfirmedAt = Long.MIN_VALUE
@@ -21,7 +19,7 @@ class DistressFusionEngine(
         }
 
         val current = streaks[candidate.marker]
-        val nextStreak = if (current == null || nowMs - current.lastAt > confirmationWindowMs) {
+        val nextStreak = if (current == null || nowMs - current.lastAt > policy.confirmationWindowMs) {
             MarkerStreak(1, nowMs)
         } else {
             MarkerStreak(current.count + 1, nowMs)
@@ -29,8 +27,8 @@ class DistressFusionEngine(
         streaks[candidate.marker] = nextStreak
 
         val cooldownElapsed = lastConfirmedAt == Long.MIN_VALUE ||
-            (nowMs >= lastConfirmedAt && nowMs - lastConfirmedAt >= cooldownMs)
-        val confirmed = nextStreak.count >= requiredConsecutiveWindows && cooldownElapsed
+            (nowMs >= lastConfirmedAt && nowMs - lastConfirmedAt >= policy.cooldownMs)
+        val confirmed = nextStreak.count >= policy.requiredConsecutiveWindows && cooldownElapsed
         if (confirmed) {
             lastConfirmedAt = nowMs
             streaks.clear()
@@ -46,8 +44,8 @@ class DistressFusionEngine(
         inference: DistressInference,
         motion: MotionSnapshot,
     ): FusionDecision? {
-        if (inference.uncertainty >= MAX_ACCEPTED_UNCERTAINTY ||
-            inference.audioQuality < MIN_ACCEPTED_AUDIO_QUALITY
+        if (inference.uncertainty >= policy.uncertaintyThreshold ||
+            inference.audioQuality < policy.audioQualityThreshold
         ) {
             return null
         }
@@ -57,7 +55,7 @@ class DistressFusionEngine(
         // Vocal distress is already corroborated by the acoustic model plus the sustained
         // multi-window streak below. Do not require the phone to move: a person can shout for
         // help while the device is on a table, in a pocket, or held completely still.
-        if (inference.screamProbability >= SCREAM_THRESHOLD) {
+        if (inference.screamProbability >= policy.screamThreshold) {
             strongest = FusionDecision(
                 marker = DistressMarker.SCREAM,
                 riskScore = inference.screamProbability,
@@ -65,7 +63,7 @@ class DistressFusionEngine(
                 rationale = "Sustained vocal distress detected acoustically",
             )
         }
-        if (inference.respiratoryProbability >= RESPIRATORY_THRESHOLD &&
+        if (inference.respiratoryProbability >= policy.respiratoryThreshold &&
             (motion.energy >= 0.08f || inference.respiratoryProbability >= 0.94f)
         ) {
             val respiratory = FusionDecision(
@@ -76,7 +74,7 @@ class DistressFusionEngine(
             )
             if (isStronger(strongest, respiratory)) strongest = respiratory
         }
-        if (inference.impactProbability >= IMPACT_THRESHOLD && motion.jerk >= IMPACT_JERK_THRESHOLD) {
+        if (inference.impactProbability >= policy.impactThreshold && motion.jerk >= policy.impactJerkThreshold) {
             val impact = FusionDecision(
                 marker = DistressMarker.IMPACT,
                 riskScore = (inference.impactProbability + motion.jerk) / 2f,
@@ -92,19 +90,11 @@ class DistressFusionEngine(
         current == null || candidate.riskScore > current.riskScore
 
     private fun decay(nowMs: Long) {
-        streaks.entries.removeIf { nowMs - it.value.lastAt > confirmationWindowMs }
+        streaks.entries.removeIf { nowMs - it.value.lastAt > policy.confirmationWindowMs }
     }
 
     private data class MarkerStreak(val count: Int, val lastAt: Long)
 
-    private companion object {
-        const val SCREAM_THRESHOLD = 0.72f
-        const val RESPIRATORY_THRESHOLD = 0.80f
-        const val IMPACT_THRESHOLD = 0.74f
-        const val IMPACT_JERK_THRESHOLD = 0.42f
-        const val MAX_ACCEPTED_UNCERTAINTY = 0.85f
-        const val MIN_ACCEPTED_AUDIO_QUALITY = 0.10f
-    }
 }
 
 data class FusionDecision(

@@ -2,7 +2,10 @@
 
 AcousticGuard is a native Android application for zero-touch, on-device distress-pattern detection. It processes short microphone windows in RAM, uses cheap DSP and motion features to gate a small local model, correlates scores with inertial motion, and requires repeated corroboration before starting a visible cancellation countdown.
 
-The repository is now compile-ready: it includes the Gradle wrapper, Android SDK configuration, the on-device model asset, unit tests, lint configuration, encrypted outbox, optional user-owned HTTPS receiver, and a debug APK build path.
+The repository contains the Android prototype, Gradle wrapper, unit tests, lint configuration,
+encrypted outbox, optional user-owned HTTPS receiver, and a debug APK build path. The bundled
+YAMNet artifact is available; the domain-specific student model remains a required external ML
+deliverable and is intentionally not fabricated in source control.
 
 ## Implemented product flow
 
@@ -21,13 +24,15 @@ The repository is now compile-ready: it includes the Gradle wrapper, Android SDK
 ## Machine-learning implementation
 
 - `ModelSelector.kt` prefers the optional domain-specific INT8 TinyML model and falls back to the verified YAMNet AudioSet artifact when the student asset is absent or fails its manifest/integrity contract.
-- `TinyDistressClassifier.kt` defines the `logmel64x32+motion-v1` input contract and uses one TFLite interpreter thread. The trained student model is intentionally not fabricated in source control; it must come from the private, reviewed training pipeline before it can become the primary model.
+- `TinyDistressClassifier.kt` defines the `logmel64x32+motion-v1` input contract, requires fixed full-integer INT8 tensors, and uses one TFLite interpreter thread. The trained student model is intentionally not fabricated in source control; it must come from the private, reviewed training pipeline before it can become the primary model.
 - `app/src/main/assets/yamnet.tflite` is the verified TensorFlow Lite Task Audio YAMNet AudioSet fallback artifact.
 - `YamnetDistressClassifier.kt` invokes YAMNet on-device through `tensorflow-lite-task-audio`.
 - `YamnetLabelMapper.kt` allow-lists the AudioSet labels relevant to this product: screaming/shouting, breathing/gasping, and acoustic impact labels.
 - `AudioSignalProcessor.kt` adds loudness, high-frequency energy, spectral flux, crest factor, silence, and envelope features.
 - `InferenceScheduler.kt` skips most quiet-state model calls while retaining a periodic quiet scan and an uncertainty-triggered retry path.
 - `DetectionMetricsTracker.kt` keeps only aggregate in-memory counters and latency percentiles for debug/operational visibility.
+- `DetectionPipeline.kt` separates scheduling, feature extraction, model invocation, and temporal fusion from the Android service; `DetectionClock` and `ReplayAudioWindowSource` support deterministic replay tests.
+- `detection_policy_v1.json` is a SHA-verified, versioned temporal policy artifact consumed by the fusion engine.
 - `MotionFeatureTracker.kt` derives inertial energy and jerk from the accelerometer.
 - `DistressFusionEngine.kt` is fail-closed: a single sound is never enough, impact requires inertial jerk, and confirmations are rate-limited.
 
@@ -58,10 +63,21 @@ app/src/main/java/com/acousticguard/
 
 Requirements:
 
-- JDK 17
+- JDK 17 or JDK 27 (the wrapper is Gradle 9.8.2; Android/Kotlin compilation still targets Java 17)
 - Android SDK Platform 35
 - Android Build Tools 35.0.0
 - Android Studio with the Android SDK location configured
+
+The repository guard rejects unsupported Java majors with a clear error. On Windows, select the
+installed JDK explicitly before invoking the wrapper, for example:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-27.0.1.0.3'
+```
+
+For the full `lintDebug` check, use JDK 17 with the current AGP 8.7.3 lint engine. JDK 27 works
+for Gradle configuration, unit tests, and APK assembly, but this lint engine's Kotlin analysis
+parser still rejects the Java 27 version string.
 
 From the repository root:
 

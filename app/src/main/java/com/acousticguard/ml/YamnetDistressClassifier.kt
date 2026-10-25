@@ -55,7 +55,7 @@ class YamnetDistressClassifier(
     override fun infer(
         samples: FloatArray,
         motion: MotionSnapshot,
-        acousticFeatures: AcousticFeatureVector? = null,
+        acousticFeatures: AcousticFeatureVector?,
     ): DistressInference {
         check(!classifier.isClosed) { "The local audio classifier is closed." }
         require(samples.size == requiredInputBufferSize) {

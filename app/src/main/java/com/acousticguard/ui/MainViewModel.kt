@@ -70,6 +70,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun queueTestEvent() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val modelVersion = monitoringStatus.value.modelInfo.modelVersion
+                .takeIf { it.isNotBlank() && it != "unavailable" }
+                ?: "manual-test"
+            val result = dispatchCoordinator.enqueue(
+                marker = "Test event",
+                confidence = 1f,
+                modelVersion = modelVersion,
+                test = true,
+            )
+            val message = result.fold(
+                onSuccess = {
+                    if (dispatchCoordinator.settings().enabled) {
+                        "Test event queued for the configured receiver. A 2xx only means receiver acceptance."
+                    } else {
+                        "Test event stored local-only because remote delivery is disabled."
+                    }
+                },
+                onFailure = { it.message },
+            )
+            refreshDispatchState(message)
+        }
+    }
+
     private suspend fun refreshDispatchState(message: String? = null) {
         val updated = withContext(Dispatchers.IO) {
             DispatchUiState(
