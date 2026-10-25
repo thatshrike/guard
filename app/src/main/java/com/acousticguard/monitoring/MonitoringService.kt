@@ -21,6 +21,8 @@ import com.acousticguard.ml.DetectionPolicy
 import com.acousticguard.ml.DetectionPolicyAssets
 import com.acousticguard.ml.ModelInfo
 import com.acousticguard.ml.ModelSelector
+import com.acousticguard.safety.NativeSafetyHandoffController
+import com.acousticguard.safety.NativeSafetyHandoffRequestResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -503,6 +505,11 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     it.status != "ACCEPTED" && it.status != "FAILED"
                 }
             }
+            val nativeHandoff = NativeSafetyHandoffController.request(
+                context = this@MonitoringService,
+                incidentId = enqueueResult.getOrNull(),
+                marker = decision.marker.label,
+            )
             cancelAlertNotification()
             MonitoringStatusStore.update { status ->
                 status.copy(
@@ -512,15 +519,34 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     lastSignalAtEpochMs = System.currentTimeMillis(),
                     pendingIncidentCount = pendingCount,
                     countdownSecondsRemaining = null,
-                    message = if (enqueueResult.isSuccess) {
-                        "Confirmed pattern stored locally. No audio was retained."
-                    } else {
-                        "Confirmed pattern could not be stored; monitoring continues locally."
-                    },
+                    message = confirmationMessage(enqueueResult.isSuccess, nativeHandoff),
                 )
             }
             pendingConfirmation = null
             pendingConfirmationJob = null
+        }
+    }
+
+    private fun confirmationMessage(
+        stored: Boolean,
+        nativeHandoff: NativeSafetyHandoffRequestResult,
+    ): String {
+        val storageMessage = if (stored) {
+            "Confirmed pattern stored locally. No audio was retained."
+        } else {
+            "Confirmed pattern could not be stored; monitoring continues locally."
+        }
+        return when (nativeHandoff) {
+            NativeSafetyHandoffRequestResult.REQUESTED ->
+                "$storageMessage Native emergency-interface assistance was requested; complete any system confirmation on screen."
+
+            NativeSafetyHandoffRequestResult.ACCESSIBILITY_REQUIRED ->
+                "$storageMessage Enable Native safety handoff in Settings to open the Android emergency interface."
+
+            NativeSafetyHandoffRequestResult.DISABLED ->
+                "$storageMessage Native safety handoff is disabled."
+
+            NativeSafetyHandoffRequestResult.NOT_REQUESTED -> storageMessage
         }
     }
 

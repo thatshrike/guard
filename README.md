@@ -19,7 +19,8 @@ deliverable and is intentionally not fabricated in source control.
 6. `DistressFusionEngine` requires repeated qualifying windows.
 7. A 10-second visible notification countdown appears with a **Cancel** action.
 8. If not cancelled, only bounded metadata is written to the encrypted Android Keystore-backed outbox.
-9. Remote delivery is optional and off by default. When explicitly enabled, the app encrypts the metadata for a user-owned HTTPS receiver and retries through WorkManager.
+9. If the user explicitly enables **Native safety handoff** and Android accessibility access, the app makes a best-effort screen wake, opens the Android power menu, and may open the system emergency interface. The final SOS/call action always remains user-confirmed.
+10. Remote delivery is optional and off by default. When explicitly enabled, the app encrypts the metadata for a user-owned HTTPS receiver and retries through WorkManager.
 
 ## Machine-learning implementation
 
@@ -121,3 +122,9 @@ The scheduler and motion policy are instrumentation foundations, not proof of a 
 ## Safety boundary
 
 This project is compile-ready and implements real on-device ML, but the bundled YAMNet model is a general AudioSet classifier, not a clinically validated distress detector. It must not be represented as a certified emergency-response system without a consented representative dataset, device/battery testing, threshold calibration, false-positive/false-negative evaluation, abuse testing, privacy/legal review, and an independent safety case. The app intentionally does not silently contact emergency services or claim that an alert reached them.
+
+The native safety handoff is an opt-in accessibility assist, not a Google Personal Safety API. Android
+does not give third-party apps a supported API for starting the power-button SOS workflow, and OEM
+lock-screen labels vary. AcousticGuard can request the system emergency interface and assist with a
+conservative entry-point click, but it will not automatically click an SOS/call action. See
+`docs/SAFETY_HANDOFF.md` for the setup and device-testing boundary.

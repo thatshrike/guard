@@ -5,4 +5,6 @@
     <string name="monitoring_channel_description">Shows when AcousticGuard is actively monitoring the microphone.</string>
     <string name="alert_channel_name">Safety alerts</string>
     <string name="alert_channel_description">High-priority notices for confirmed local distress patterns.</string>
+    <string name="native_safety_accessibility_label">AcousticGuard native safety handoff</string>
+    <string name="native_safety_accessibility_description">During a confirmed alert, AcousticGuard may wake the screen and open the Android emergency interface. It does not place calls automatically.</string>
 </resources>

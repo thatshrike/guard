@@ -80,6 +80,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.acousticguard.dispatch.DispatchSettings
 import com.acousticguard.monitoring.EngineState
 import com.acousticguard.monitoring.MonitoringStatus
+import com.acousticguard.safety.NativeSafetyHandoffPhase
+import com.acousticguard.safety.NativeSafetyHandoffState
 import com.acousticguard.ui.theme.SignalAmber
 import com.acousticguard.ui.theme.SignalBlue
 import com.acousticguard.ui.theme.SignalGreen
@@ -90,8 +92,16 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val status by viewModel.monitoringStatus.collectAsState()
     val dispatchUi by viewModel.dispatchUi.collectAsState()
+    val nativeSafetyUi by viewModel.nativeSafetyUi.collectAsState()
+    val nativeSafetyStatus by viewModel.nativeSafetyStatus.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var permissionMessage by remember { mutableStateOf<String?>(null) }
+
+    val accessibilitySettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        viewModel.refreshNativeSafety()
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -166,13 +176,23 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
                 1 -> SafetyScreen(
                     status = status,
                     dispatchUi = dispatchUi,
+                    nativeSafetyUi = nativeSafetyUi,
+                    nativeSafetyStatus = nativeSafetyStatus,
                     onOpenSettings = { selectedTab = 2 },
+                    onOpenAccessibilitySettings = {
+                        accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    },
                 )
                 else -> SettingsScreen(
                     status = status,
                     dispatchUi = dispatchUi,
+                    nativeSafetyUi = nativeSafetyUi,
                     onRequestPermissions = { permissionLauncher.launch(requiredPermissions()) },
                     onSaveDispatchSettings = viewModel::saveDispatchSettings,
+                    onNativeSafetyEnabled = viewModel::setNativeSafetyEnabled,
+                    onOpenAccessibilitySettings = {
+                        accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    },
                     onClearDispatchQueue = viewModel::clearDispatchQueue,
                     onQueueTestEvent = viewModel::queueTestEvent,
                 )
@@ -413,7 +433,10 @@ private fun PrivacyCard(onOpenSafety: () -> Unit) {
 private fun SafetyScreen(
     status: MonitoringStatus,
     dispatchUi: DispatchUiState,
+    nativeSafetyUi: NativeSafetyUiState,
+    nativeSafetyStatus: NativeSafetyHandoffState,
     onOpenSettings: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -435,6 +458,13 @@ private fun SafetyScreen(
         }
         item {
             QueueCard(status = status)
+        }
+        item {
+            NativeSafetyStatusCard(
+                settings = nativeSafetyUi,
+                handoff = nativeSafetyStatus,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            )
         }
         item {
             Surface(
@@ -471,6 +501,65 @@ private fun SafetyScreen(
                 message = "Prototype boundary: this app is not a certified emergency device. Validate false-positive behavior with responsible adults before relying on it.",
                 isError = false,
             )
+        }
+    }
+}
+
+@Composable
+private fun NativeSafetyStatusCard(
+    settings: NativeSafetyUiState,
+    handoff: NativeSafetyHandoffState,
+    onOpenAccessibilitySettings: () -> Unit,
+) {
+    val needsAttention = handoff.phase == NativeSafetyHandoffPhase.ACCESSIBILITY_REQUIRED ||
+        handoff.phase == NativeSafetyHandoffPhase.FAILED
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = if (needsAttention) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (needsAttention) Icons.Filled.WarningAmber else Icons.Filled.Security,
+                    contentDescription = null,
+                    tint = if (needsAttention) SignalRed else SignalBlue,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Native safety handoff", style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        when {
+                            !settings.enabled -> "Off"
+                            !settings.accessibilityEnabled -> "Accessibility access needed"
+                            else -> "Armed for confirmed alerts"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                handoff.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "After the 10-second cancel window, AcousticGuard can wake the screen and open the Android emergency interface. It never places an SOS call automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!settings.accessibilityEnabled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(onClick = onOpenAccessibilitySettings) {
+                    Text("Open accessibility settings")
+                }
+            }
         }
     }
 }
@@ -589,8 +678,11 @@ private fun QueueCard(status: MonitoringStatus) {
 private fun SettingsScreen(
     status: MonitoringStatus,
     dispatchUi: DispatchUiState,
+    nativeSafetyUi: NativeSafetyUiState,
     onRequestPermissions: () -> Unit,
     onSaveDispatchSettings: (DispatchSettings) -> Unit,
+    onNativeSafetyEnabled: (Boolean) -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     onClearDispatchQueue: () -> Unit,
     onQueueTestEvent: () -> Unit,
 ) {
@@ -658,6 +750,13 @@ private fun SettingsScreen(
             }
         }
         item {
+            NativeSafetySettingsCard(
+                settings = nativeSafetyUi,
+                onEnabledChange = onNativeSafetyEnabled,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            )
+        }
+        item {
             DispatchSettingsCard(
                     state = dispatchUi,
                     onSave = onSaveDispatchSettings,
@@ -710,6 +809,67 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NativeSafetySettingsCard(
+    settings: NativeSafetyUiState,
+    onEnabledChange: (Boolean) -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Native safety handoff", style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Optional special access for confirmed alerts only. AcousticGuard can wake the screen and open the Android emergency interface; it does not place calls automatically.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = settings.enabled,
+                    onCheckedChange = onEnabledChange,
+                    modifier = Modifier.semantics { contentDescription = "Enable native safety handoff" },
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            PermissionRow(
+                icon = Icons.Filled.Security,
+                title = "Accessibility service",
+                detail = if (settings.accessibilityEnabled) {
+                    "Enabled for the confirmed-alert handoff"
+                } else {
+                    "Required before native handoff can run"
+                },
+                granted = settings.accessibilityEnabled,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onOpenAccessibilitySettings,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Open accessibility settings")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "The service stays idle during normal monitoring and reads the visible system window only after a confirmed detection requests the handoff. Google Personal Safety remains controlled by Android and may require your final tap.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

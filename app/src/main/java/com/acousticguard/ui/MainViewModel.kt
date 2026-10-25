@@ -8,6 +8,10 @@ import com.acousticguard.dispatch.DispatchSettings
 import com.acousticguard.dispatch.DispatchSnapshot
 import com.acousticguard.monitoring.MonitoringController
 import com.acousticguard.monitoring.MonitoringStatusStore
+import com.acousticguard.safety.AccessibilityServiceAvailability
+import com.acousticguard.safety.NativeSafetyHandoffController
+import com.acousticguard.safety.NativeSafetyHandoffPreferences
+import com.acousticguard.safety.NativeSafetyHandoffStatusStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,13 +26,22 @@ data class DispatchUiState(
     val saving: Boolean = false,
 )
 
+data class NativeSafetyUiState(
+    val enabled: Boolean = false,
+    val accessibilityEnabled: Boolean = false,
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val monitoringStatus = MonitoringStatusStore.state
+    val nativeSafetyStatus = NativeSafetyHandoffStatusStore.state
     private val dispatchCoordinator = DispatchCoordinator(application)
     private val mutableDispatchUi = MutableStateFlow(DispatchUiState())
     val dispatchUi: StateFlow<DispatchUiState> = mutableDispatchUi.asStateFlow()
+    private val mutableNativeSafetyUi = MutableStateFlow(NativeSafetyUiState())
+    val nativeSafetyUi: StateFlow<NativeSafetyUiState> = mutableNativeSafetyUi.asStateFlow()
 
     init {
+        refreshNativeSafety()
         viewModelScope.launch {
             launch(Dispatchers.IO) { dispatchCoordinator.retry() }
             launch(Dispatchers.IO) { refreshDispatchState() }
@@ -44,6 +57,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopMonitoring() {
         MonitoringController.stop(getApplication())
+    }
+
+    fun setNativeSafetyEnabled(enabled: Boolean) {
+        NativeSafetyHandoffController.setEnabled(getApplication(), enabled)
+        refreshNativeSafety()
+    }
+
+    fun refreshNativeSafety() {
+        val context = getApplication<Application>()
+        mutableNativeSafetyUi.value = NativeSafetyUiState(
+            enabled = NativeSafetyHandoffPreferences.isEnabled(context),
+            accessibilityEnabled = AccessibilityServiceAvailability.isEnabled(context),
+        )
+        NativeSafetyHandoffController.refreshAvailability(context)
     }
 
     fun saveDispatchSettings(settings: DispatchSettings) {
