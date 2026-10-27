@@ -1,5 +1,6 @@
 package com.acousticguard.safety
 
+import android.annotation.SuppressLint
 import android.content.Context
 
 /**
@@ -19,6 +20,7 @@ object NativeSafetyPendingRequestStore {
     private const val KEY_CREATED_AT = "pending_created_at"
     private const val MAX_AGE_MS = 30_000L
 
+    @SuppressLint("ApplySharedPref")
     fun save(context: Context, request: PendingNativeSafetyRequest) {
         preferences(context).edit()
             .putString(KEY_INCIDENT_ID, request.incidentId)

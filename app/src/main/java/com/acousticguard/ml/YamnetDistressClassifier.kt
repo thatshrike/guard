@@ -17,6 +17,7 @@ class YamnetDistressClassifier(
 ) : DistressClassifier {
     private val classifier: AudioClassifier
     private val tensorAudio: TensorAudio
+    private val clearBuffer: FloatArray
 
     override val modelInfo = ModelInfo(
         modelVersion = MODEL_VERSION,
@@ -44,6 +45,7 @@ class YamnetDistressClassifier(
             options,
         )
         tensorAudio = classifier.createInputTensorAudio()
+        clearBuffer = FloatArray(classifier.requiredInputBufferSize.toInt())
     }
 
     override val requiredInputBufferSize: Int
@@ -61,17 +63,23 @@ class YamnetDistressClassifier(
         require(samples.size == requiredInputBufferSize) {
             "YAMNet requires $requiredInputBufferSize samples, received ${samples.size}."
         }
-        tensorAudio.load(samples)
-        val categories = classifier.classify(tensorAudio)
-            .flatMap { it.categories }
-            .map { YamnetCategoryScore(label = it.label, score = it.score) }
-        return YamnetLabelMapper.toInference(
-            categories = categories,
-            motion = motion,
-            acousticFeatures = acousticFeatures,
-            modelVersion = modelInfo.modelVersion,
-            modelSource = modelInfo.source,
-        )
+        return try {
+            tensorAudio.load(samples)
+            val categories = classifier.classify(tensorAudio)
+                .flatMap { it.categories }
+                .map { YamnetCategoryScore(label = it.label, score = it.score) }
+            YamnetLabelMapper.toInference(
+                categories = categories,
+                motion = motion,
+                acousticFeatures = acousticFeatures,
+                modelVersion = modelInfo.modelVersion,
+                modelSource = modelInfo.source,
+            )
+        } finally {
+            // TensorAudio keeps a ring buffer internally. Overwrite its complete capacity so the
+            // just-classified PCM window is not retained after this inference returns.
+            runCatching { tensorAudio.load(clearBuffer) }
+        }
     }
 
     override fun close() {

@@ -13,7 +13,11 @@ data class DispatchSettings(
 data class DispatchSnapshot(
     val records: List<IncidentSummary> = emptyList(),
     val error: String? = null,
-)
+) {
+    /** Records that still need local retention, delivery, or user-visible follow-up. */
+    val pendingCount: Int
+        get() = records.count { it.status != DispatchStatus.ACCEPTED && it.status != DispatchStatus.FAILED }
+}
 
 data class IncidentSummary(
     val id: String,

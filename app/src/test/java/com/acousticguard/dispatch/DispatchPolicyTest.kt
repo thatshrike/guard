@@ -55,4 +55,17 @@ class DispatchPolicyTest {
         assertEquals("EXPIRED", expired.terminalStatus)
         assertTrue(DispatchPolicy.isExpired(now - INCIDENT_TTL_MS, now))
     }
+
+    @Test
+    fun snapshotPendingCountExcludesTerminalRecords() {
+        val snapshot = DispatchSnapshot(
+            records = listOf(
+                IncidentSummary("00000000-0000-0000-0000-000000000001", 1L, "local", DispatchStatus.LOCAL_ONLY, false),
+                IncidentSummary("00000000-0000-0000-0000-000000000002", 2L, "accepted", DispatchStatus.ACCEPTED, false),
+                IncidentSummary("00000000-0000-0000-0000-000000000003", 3L, "failed", DispatchStatus.FAILED, false),
+            ),
+        )
+
+        assertEquals(1, snapshot.pendingCount)
+    }
 }

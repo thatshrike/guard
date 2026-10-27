@@ -57,6 +57,24 @@ class DetectionPipelineTest {
     }
 
     @Test
+    fun aSkippedQuietWindowBreaksTheConfirmationStreak() {
+        val pipeline = DetectionPipeline(
+            classifier = FakeClassifier { screamInference() },
+            scheduler = InferenceScheduler(quietScanIntervalMs = 2_000L),
+        )
+        val samples = FloatArray(16_000)
+
+        pipeline.processAt(samples, MotionSnapshot(), nowMs = 0L)
+        val skipped = pipeline.processAt(samples, MotionSnapshot(), nowMs = 1_000L)
+        val result = pipeline.processAt(samples, MotionSnapshot(), nowMs = 2_000L)
+
+        assertFalse(skipped.modelInvoked)
+        assertTrue(result.modelInvoked)
+        assertEquals(1, result.decision?.consecutiveWindows)
+        assertFalse(result.decision?.confirmed == true)
+    }
+
+    @Test
     fun uncertaintyAndLowQualityAreRejectedBeforeConfirmation() {
         val uncertainPipeline = pipeline(FakeClassifier {
             screamInference().copy(uncertainty = 0.95f)

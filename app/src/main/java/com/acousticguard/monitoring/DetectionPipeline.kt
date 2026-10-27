@@ -43,6 +43,7 @@ class DetectionPipeline(
             scheduler.previousResultWasUncertain()
 
         if (!shouldRunModel) {
+            fusionEngine.resetCandidateStreak()
             return DetectionPipelineResult(
                 timestampMs = nowMs,
                 features = features,

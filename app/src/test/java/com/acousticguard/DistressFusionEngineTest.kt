@@ -4,6 +4,7 @@ import com.acousticguard.ml.DistressFusionEngine
 import com.acousticguard.ml.DistressInference
 import com.acousticguard.ml.DistressMarker
 import com.acousticguard.ml.MotionSnapshot
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -39,6 +40,24 @@ class DistressFusionEngineTest {
         assertNotNull(decision)
         assertTrue(decision!!.confirmed)
         assertTrue(decision.marker == DistressMarker.SCREAM)
+    }
+
+    @Test
+    fun aNonQualifyingWindowBreaksTheConfirmationStreak() {
+        val engine = DistressFusionEngine()
+        val normal = DistressInference(
+            screamProbability = 0f,
+            respiratoryProbability = 0f,
+            impactProbability = 0f,
+            modelVersion = "test",
+        )
+
+        engine.update(scream, MotionSnapshot(), nowMs = 0L)
+        assertTrue(engine.update(normal, MotionSnapshot(), nowMs = 1_000L) == null)
+        val decision = engine.update(scream, MotionSnapshot(), nowMs = 2_000L)
+
+        assertEquals(1, decision?.consecutiveWindows)
+        assertFalse(decision?.confirmed == true)
     }
 
     @Test

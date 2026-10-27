@@ -14,11 +14,17 @@ class DistressFusionEngine(
     fun update(inference: DistressInference, motion: MotionSnapshot, nowMs: Long): FusionDecision? {
         val candidate = strongestCandidate(inference, motion)
         if (candidate == null) {
-            decay(nowMs)
+            // A confirmation streak is made of consecutive qualifying windows. A normal,
+            // uncertain, or low-quality window must break it immediately rather than merely
+            // allowing the old streak to age out over several seconds.
+            streaks.clear()
             return null
         }
 
         val current = streaks[candidate.marker]
+        // Only the same marker in the immediately preceding qualifying window can extend a
+        // streak. A switch from vocal/respiratory/impact evidence starts a fresh streak.
+        streaks.clear()
         val nextStreak = if (current == null || nowMs - current.lastAt > policy.confirmationWindowMs) {
             MarkerStreak(1, nowMs)
         } else {
@@ -89,8 +95,9 @@ class DistressFusionEngine(
     private fun isStronger(current: FusionDecision?, candidate: FusionDecision): Boolean =
         current == null || candidate.riskScore > current.riskScore
 
-    private fun decay(nowMs: Long) {
-        streaks.entries.removeIf { nowMs - it.value.lastAt > policy.confirmationWindowMs }
+    /** Breaks a candidate streak when the scheduler skips a model invocation for a quiet window. */
+    fun resetCandidateStreak() {
+        streaks.clear()
     }
 
     private data class MarkerStreak(val count: Int, val lastAt: Long)

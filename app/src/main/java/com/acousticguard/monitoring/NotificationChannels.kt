@@ -3,6 +3,7 @@ package com.acousticguard.monitoring
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import androidx.core.app.NotificationManagerCompat
 import com.acousticguard.R
 
 /** All user-visible monitoring channels are owned by the application layer, not the dispatch sender. */
@@ -32,5 +33,19 @@ object NotificationChannels {
                 enableVibration(true)
             },
         )
+    }
+
+    /**
+     * Monitoring is only safe to start when both the ongoing status notification and the
+     * cancellation-alert channel can actually surface notifications. Android lets users block a
+     * channel independently of the app-wide notification permission.
+     */
+    fun areRequiredChannelsEnabled(context: Context): Boolean {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return false
+        return listOf(MONITORING_CHANNEL_ID, ALERT_CHANNEL_ID).all { channelId ->
+            manager.getNotificationChannel(channelId)?.importance != NotificationManager.IMPORTANCE_NONE
+        }
     }
 }

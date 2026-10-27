@@ -75,11 +75,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.acousticguard.dispatch.DispatchSettings
 import com.acousticguard.monitoring.EngineState
 import com.acousticguard.monitoring.MonitoringStatus
+import com.acousticguard.monitoring.NotificationChannels
 import com.acousticguard.safety.NativeSafetyHandoffPhase
 import com.acousticguard.safety.NativeSafetyHandoffState
 import com.acousticguard.ui.theme.SignalAmber
@@ -169,6 +169,7 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
             when (selectedTab) {
                 0 -> MonitorScreen(
                     status = status,
+                    pendingIncidentCount = dispatchUi.snapshot.pendingCount,
                     permissionMessage = permissionMessage,
                     onToggleMonitoring = ::toggleMonitoring,
                     onOpenSafety = { selectedTab = 1 },
@@ -204,6 +205,7 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
 @Composable
 private fun MonitorScreen(
     status: MonitoringStatus,
+    pendingIncidentCount: Int,
     permissionMessage: String?,
     onToggleMonitoring: (Boolean) -> Unit,
     onOpenSafety: () -> Unit,
@@ -221,7 +223,11 @@ private fun MonitorScreen(
             )
         }
         item {
-            MonitoringHero(status = status, onToggleMonitoring = onToggleMonitoring)
+            MonitoringHero(
+                status = status,
+                pendingIncidentCount = pendingIncidentCount,
+                onToggleMonitoring = onToggleMonitoring,
+            )
         }
         permissionMessage?.let { message ->
             item { InlineNotice(message = message, isError = true) }
@@ -263,7 +269,11 @@ private fun MonitorScreen(
 }
 
 @Composable
-private fun MonitoringHero(status: MonitoringStatus, onToggleMonitoring: (Boolean) -> Unit) {
+private fun MonitoringHero(
+    status: MonitoringStatus,
+    pendingIncidentCount: Int,
+    onToggleMonitoring: (Boolean) -> Unit,
+) {
     val active = status.isMonitoring || status.engineState == EngineState.STARTING
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -320,7 +330,7 @@ private fun MonitoringHero(status: MonitoringStatus, onToggleMonitoring: (Boolea
                     modifier = Modifier.weight(1f),
                 )
                 MetricCell(
-                    value = if (status.pendingIncidentCount == 0) "Clear" else status.pendingIncidentCount.toString(),
+                    value = if (pendingIncidentCount == 0) "Clear" else pendingIncidentCount.toString(),
                     label = "Queue",
                     modifier = Modifier.weight(1f),
                 )
@@ -457,7 +467,7 @@ private fun SafetyScreen(
             ModelStatusCard(status = status)
         }
         item {
-            QueueCard(status = status)
+            QueueCard(pendingIncidentCount = dispatchUi.snapshot.pendingCount)
         }
         item {
             NativeSafetyStatusCard(
@@ -640,8 +650,8 @@ private fun ModelStatusCard(status: MonitoringStatus) {
 }
 
 @Composable
-private fun QueueCard(status: MonitoringStatus) {
-    val hasQueue = status.pendingIncidentCount > 0
+private fun QueueCard(pendingIncidentCount: Int) {
+    val hasQueue = pendingIncidentCount > 0
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -660,7 +670,7 @@ private fun QueueCard(status: MonitoringStatus) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    if (hasQueue) "${status.pendingIncidentCount} encrypted event(s) queued" else "No confirmed events queued",
+                    if (hasQueue) "$pendingIncidentCount encrypted event(s) queued" else "No confirmed events queued",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1150,7 +1160,7 @@ private fun hasRequiredPermissions(context: Context): Boolean {
 }
 
 private fun notificationsAvailable(context: Context): Boolean =
-    NotificationManagerCompat.from(context).areNotificationsEnabled() &&
+    NotificationChannels.areRequiredChannelsEnabled(context) &&
         (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             hasPermission(context, Manifest.permission.POST_NOTIFICATIONS))
 

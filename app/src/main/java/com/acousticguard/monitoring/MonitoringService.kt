@@ -51,6 +51,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     private var inferenceJob: Job? = null
     private var pendingConfirmationJob: Job? = null
     private var pendingConfirmation: PendingConfirmation? = null
+    private var preserveTerminalStatus = false
 
     override fun onCreate() {
         super.onCreate()
@@ -72,17 +73,17 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     message = "Microphone permission is required before monitoring can start.",
                 )
             }
-            stopSelf()
+            stopAfterFailure()
             return START_NOT_STICKY
         }
         if (!notificationsAvailable()) {
             MonitoringStatusStore.update {
                 it.copy(
                     engineState = EngineState.BLOCKED,
-                    message = "Notifications must remain enabled so monitoring and alert cancellation stay visible.",
+                    message = "Monitoring and alert notifications must remain enabled so cancellation stays visible.",
                 )
             }
-            stopSelf()
+            stopAfterFailure()
             return START_NOT_STICKY
         }
 
@@ -94,7 +95,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     message = "The monitoring notification could not be started. Monitoring is paused.",
                 )
             }
-            stopSelf()
+            stopAfterFailure()
             return START_NOT_STICKY
         }
         registerMotionSensor(MotionSamplingMode.LOW_POWER)
@@ -114,7 +115,8 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         sensorManager?.unregisterListener(this)
         motionSamplingMode = null
         serviceScope.cancel()
-        MonitoringStatusStore.reset()
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        if (!preserveTerminalStatus) MonitoringStatusStore.reset()
         super.onDestroy()
     }
 
@@ -216,7 +218,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                             message = "The local audio models could not be loaded. Monitoring is paused.",
                         )
                     }
-                    stopSelf()
+                    stopAfterFailure()
                     return@launch
             }
             val classifier: DistressClassifier = selection.classifier
@@ -232,7 +234,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "The detection policy could not be verified. Monitoring is paused.",
                     )
                 }
-                stopSelf()
+                stopAfterFailure()
                 return@launch
             }
             activePolicy = policy
@@ -267,7 +269,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                             message = "The microphone could not be initialized.",
                         )
                     }
-                    stopSelf()
+                    stopAfterFailure()
                     return@launch
                 }
             if (record.state != AudioRecord.STATE_INITIALIZED) {
@@ -281,7 +283,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "The microphone could not be initialized.",
                     )
                 }
-                stopSelf()
+                stopAfterFailure()
                 return@launch
             }
             audioRecord = record
@@ -389,6 +391,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "Microphone permission was revoked.",
                     )
                 }
+                stopAfterFailure()
             } catch (failure: IllegalStateException) {
                 metrics.recordDroppedWindow()
                 val detail = failure.message
@@ -404,6 +407,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "Microphone input stopped: $detail Toggle monitoring off and on to retry.",
                     )
                 }
+                stopAfterFailure()
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 metrics.recordDroppedWindow()
@@ -420,6 +424,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                         message = "Local monitoring stopped: $detail Toggle monitoring off and on to retry.",
                     )
                 }
+                stopAfterFailure()
             } finally {
                 runCatching { record.stop() }
                 record.release()
@@ -492,6 +497,23 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 delay(1_000L)
             }
 
+            // Re-check the user-visible cancellation path immediately before durable enqueue. This
+            // closes the small race where a channel is blocked while the final countdown tick is
+            // sleeping.
+            if (!notificationsAvailable()) {
+                pendingConfirmation = null
+                pendingConfirmationJob = null
+                cancelAlertNotification()
+                MonitoringStatusStore.update { status ->
+                    status.copy(
+                        engineState = EngineState.BLOCKED,
+                        countdownSecondsRemaining = null,
+                        message = "The cancellation notification became unavailable; the potential event was not auto-enqueued.",
+                    )
+                }
+                return@launch
+            }
+
             val enqueueResult = withContext(Dispatchers.IO) {
                 dispatchCoordinator.enqueue(
                     marker = decision.marker.label,
@@ -501,9 +523,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 )
             }
             val pendingCount = withContext(Dispatchers.IO) {
-                dispatchCoordinator.snapshot().records.count {
-                    it.status != "ACCEPTED" && it.status != "FAILED"
-                }
+                dispatchCoordinator.snapshot().pendingCount
             }
             val nativeHandoff = NativeSafetyHandoffController.request(
                 context = this@MonitoringService,
@@ -597,9 +617,15 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     }
 
     private fun notificationsAvailable(): Boolean =
-        NotificationManagerCompat.from(this).areNotificationsEnabled() &&
+        NotificationChannels.areRequiredChannelsEnabled(this) &&
             (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+
+    private fun stopAfterFailure() {
+        preserveTerminalStatus = true
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
 
     private data class PendingConfirmation(
         val token: Long,
