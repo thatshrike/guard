@@ -41,6 +41,12 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeOff
+import com.acousticguard.safety.SosConfig
+import com.acousticguard.safety.EmergencySirenPlayer
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -92,6 +98,7 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val status by viewModel.monitoringStatus.collectAsState()
     val dispatchUi by viewModel.dispatchUi.collectAsState()
+    val sosConfig by viewModel.sosConfig.collectAsState()
     val nativeSafetyUi by viewModel.nativeSafetyUi.collectAsState()
     val nativeSafetyStatus by viewModel.nativeSafetyStatus.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -177,9 +184,11 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
                 1 -> SafetyScreen(
                     status = status,
                     dispatchUi = dispatchUi,
+                    sosConfig = sosConfig,
                     nativeSafetyUi = nativeSafetyUi,
                     nativeSafetyStatus = nativeSafetyStatus,
                     onOpenSettings = { selectedTab = 2 },
+                    onSilenceSiren = viewModel::stopSiren,
                     onOpenAccessibilitySettings = {
                         accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     },
@@ -187,9 +196,13 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
                 else -> SettingsScreen(
                     status = status,
                     dispatchUi = dispatchUi,
+                    sosConfig = sosConfig,
                     nativeSafetyUi = nativeSafetyUi,
                     onRequestPermissions = { permissionLauncher.launch(requiredPermissions()) },
                     onSaveDispatchSettings = viewModel::saveDispatchSettings,
+                    onSaveSosConfig = viewModel::saveSosConfig,
+                    onTestSos = viewModel::triggerTestSos,
+                    onSilenceSiren = viewModel::stopSiren,
                     onNativeSafetyEnabled = viewModel::setNativeSafetyEnabled,
                     onOpenAccessibilitySettings = {
                         accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -443,9 +456,11 @@ private fun PrivacyCard(onOpenSafety: () -> Unit) {
 private fun SafetyScreen(
     status: MonitoringStatus,
     dispatchUi: DispatchUiState,
+    sosConfig: SosConfig,
     nativeSafetyUi: NativeSafetyUiState,
     nativeSafetyStatus: NativeSafetyHandoffState,
     onOpenSettings: () -> Unit,
+    onSilenceSiren: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
     LazyColumn(
@@ -456,8 +471,15 @@ private fun SafetyScreen(
         item {
             AppHeader(
                 eyebrow = "SAFETY CENTER",
-                title = "Designed to fail closed.",
-                subtitle = "A single unusual sound is never enough to trigger a confirmed event.",
+                title = "Hands-free protection.",
+                subtitle = "Corroborated distress triggers direct emergency calling, SMS, and deterrent alarm.",
+            )
+        }
+        item {
+            AutonomousSosCard(
+                config = sosConfig,
+                onOpenSettings = onOpenSettings,
+                onSilenceSiren = onSilenceSiren,
             )
         }
         item {
@@ -511,6 +533,81 @@ private fun SafetyScreen(
                 message = "Prototype boundary: this app is not a certified emergency device. Validate false-positive behavior with responsible adults before relying on it.",
                 isError = false,
             )
+        }
+    }
+}
+
+@Composable
+private fun AutonomousSosCard(
+    config: SosConfig,
+    onOpenSettings: () -> Unit,
+    onSilenceSiren: () -> Unit,
+) {
+    val isSirenActive = EmergencySirenPlayer.isPlaying
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = if (isSirenActive) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (isSirenActive) Icons.Filled.WarningAmber else Icons.Filled.Shield,
+                    contentDescription = null,
+                    tint = if (isSirenActive) SignalRed else SignalGreen,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Hands-Free Autonomous SOS", style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        if (isSirenActive) "EMERGENCY SIREN ACTIVE" else "Armed on confirmed distress",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isSirenActive) SignalRed else SignalGreen,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            if (isSirenActive) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onSilenceSiren,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = SignalRed),
+                ) {
+                    Icon(Icons.Filled.VolumeOff, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("SILENCE SIREN")
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(10.dp))
+            SettingRow(
+                label = "Auto Emergency Call",
+                value = if (config.autoCallEnabled && config.primaryCallNumber.isNotBlank()) config.primaryCallNumber else "Disabled",
+            )
+            SettingRow(
+                label = "Emergency SMS Alerts",
+                value = if (config.autoSmsEnabled && config.emergencySmsNumbers.isNotBlank()) {
+                    "${config.emergencySmsNumbers.split(',', ';', '\n').filter { it.isNotBlank() }.size} contact(s)"
+                } else {
+                    "Disabled"
+                },
+            )
+            SettingRow(
+                label = "Deterrent Alarm Siren",
+                value = if (config.sirenEnabled) "Enabled" else "Disabled",
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Configure SOS Contacts & Calling")
+            }
         }
     }
 }
@@ -688,9 +785,13 @@ private fun QueueCard(pendingIncidentCount: Int) {
 private fun SettingsScreen(
     status: MonitoringStatus,
     dispatchUi: DispatchUiState,
+    sosConfig: SosConfig,
     nativeSafetyUi: NativeSafetyUiState,
     onRequestPermissions: () -> Unit,
     onSaveDispatchSettings: (DispatchSettings) -> Unit,
+    onSaveSosConfig: (SosConfig) -> Unit,
+    onTestSos: () -> Unit,
+    onSilenceSiren: () -> Unit,
     onNativeSafetyEnabled: (Boolean) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onClearDispatchQueue: () -> Unit,
@@ -708,8 +809,17 @@ private fun SettingsScreen(
         item {
             AppHeader(
                 eyebrow = "SETTINGS",
-                title = "Quiet controls.",
-                subtitle = "Everything important stays explicit and close at hand.",
+                title = "Safety & controls.",
+                subtitle = "Configure automated emergency calling, SMS, and deterrence.",
+            )
+        }
+        item {
+            AutonomousSosSettingsCard(
+                config = sosConfig,
+                onSaveConfig = onSaveSosConfig,
+                onTestSos = onTestSos,
+                onSilenceSiren = onSilenceSiren,
+                onRequestPermissions = onRequestPermissions,
             )
         }
         item {
@@ -820,6 +930,201 @@ private fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun AutonomousSosSettingsCard(
+    config: SosConfig,
+    onSaveConfig: (SosConfig) -> Unit,
+    onTestSos: () -> Unit,
+    onSilenceSiren: () -> Unit,
+    onRequestPermissions: () -> Unit,
+) {
+    var primaryCallNumber by remember(config.primaryCallNumber) { mutableStateOf(config.primaryCallNumber) }
+    var autoCallEnabled by remember(config.autoCallEnabled) { mutableStateOf(config.autoCallEnabled) }
+    var emergencySmsNumbers by remember(config.emergencySmsNumbers) { mutableStateOf(config.emergencySmsNumbers) }
+    var autoSmsEnabled by remember(config.autoSmsEnabled) { mutableStateOf(config.autoSmsEnabled) }
+    var sirenEnabled by remember(config.sirenEnabled) { mutableStateOf(config.sirenEnabled) }
+    var customSmsMessage by remember(config.customSmsMessage) { mutableStateOf(config.customSmsMessage) }
+    var savedNotice by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val callPermissionGranted = hasPermission(context, Manifest.permission.CALL_PHONE)
+    val smsPermissionGranted = hasPermission(context, Manifest.permission.SEND_SMS)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Phone, contentDescription = null, tint = SignalBlue)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Hands-Free Autonomous SOS", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "Direct cellular calling, SMS broadcast, and deterrent siren upon confirmed distress.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Primary Call Number
+            OutlinedTextField(
+                value = primaryCallNumber,
+                onValueChange = {
+                    primaryCallNumber = it
+                    savedNotice = false
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Primary Emergency Phone Number") },
+                placeholder = { Text("e.g. +1234567890 or 911") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Phone, contentDescription = null) },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Auto-dial on confirmed distress", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = autoCallEnabled,
+                    onCheckedChange = {
+                        autoCallEnabled = it
+                        savedNotice = false
+                    },
+                )
+            }
+            PermissionRow(
+                icon = Icons.Filled.Phone,
+                title = "Direct calling access",
+                detail = if (callPermissionGranted) "Granted (CALL_PHONE)" else "Required for autonomous emergency call",
+                granted = callPermissionGranted,
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Emergency SMS Numbers
+            OutlinedTextField(
+                value = emergencySmsNumbers,
+                onValueChange = {
+                    emergencySmsNumbers = it
+                    savedNotice = false
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Emergency SMS Recipients") },
+                placeholder = { Text("Comma-separated phone numbers") },
+                leadingIcon = { Icon(Icons.Filled.Sms, contentDescription = null) },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Send emergency SMS alerts", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = autoSmsEnabled,
+                    onCheckedChange = {
+                        autoSmsEnabled = it
+                        savedNotice = false
+                    },
+                )
+            }
+            PermissionRow(
+                icon = Icons.Filled.Sms,
+                title = "Emergency SMS access",
+                detail = if (smsPermissionGranted) "Granted (SEND_SMS)" else "Required for autonomous emergency texts",
+                granted = smsPermissionGranted,
+            )
+
+            if (!callPermissionGranted || !smsPermissionGranted) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRequestPermissions,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Grant Calling & SMS Permissions")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Siren Toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Piercing Deterrent Siren", style = MaterialTheme.typography.bodyLarge)
+                    Text("Sounds loud 850/1250 Hz siren through speaker to deter attackers", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = sirenEnabled,
+                    onCheckedChange = {
+                        sirenEnabled = it
+                        savedNotice = false
+                    },
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    onSaveConfig(
+                        SosConfig(
+                            primaryCallNumber = primaryCallNumber,
+                            autoCallEnabled = autoCallEnabled,
+                            emergencySmsNumbers = emergencySmsNumbers,
+                            autoSmsEnabled = autoSmsEnabled,
+                            sirenEnabled = sirenEnabled,
+                            customSmsMessage = customSmsMessage,
+                        )
+                    )
+                    savedNotice = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (savedNotice) "Settings Saved!" else "Save Emergency SOS Settings")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onTestSos,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Test SOS Action")
+                }
+                if (EmergencySirenPlayer.isPlaying) {
+                    Button(
+                        onClick = onSilenceSiren,
+                        modifier = Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = SignalRed),
+                    ) {
+                        Text("Stop Siren")
+                    }
+                }
+            }
         }
     }
 }
@@ -1151,6 +1456,8 @@ private fun InlineNotice(message: String, isError: Boolean) {
 private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.RECORD_AUDIO)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+    add(Manifest.permission.CALL_PHONE)
+    add(Manifest.permission.SEND_SMS)
 }.toTypedArray()
 
 private fun hasRequiredPermissions(context: Context): Boolean {

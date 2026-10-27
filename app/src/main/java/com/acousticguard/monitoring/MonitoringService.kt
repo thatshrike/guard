@@ -21,6 +21,8 @@ import com.acousticguard.ml.DetectionPolicy
 import com.acousticguard.ml.DetectionPolicyAssets
 import com.acousticguard.ml.ModelInfo
 import com.acousticguard.ml.ModelSelector
+import com.acousticguard.safety.DirectEmergencyDispatcher
+import com.acousticguard.safety.EmergencySirenPlayer
 import com.acousticguard.safety.NativeSafetyHandoffController
 import com.acousticguard.safety.NativeSafetyHandoffRequestResult
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +68,10 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             cancelPendingConfirmation()
             return START_STICKY
         }
+        if (intent?.action == ACTION_STOP_SIREN) {
+            EmergencySirenPlayer.stop()
+            return START_STICKY
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             MonitoringStatusStore.update {
                 it.copy(
@@ -104,6 +110,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     }
 
     override fun onDestroy() {
+        EmergencySirenPlayer.stop()
         pendingConfirmationJob?.cancel()
         pendingConfirmation = null
         cancelAlertNotification()
@@ -526,23 +533,44 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             val pendingCount = withContext(Dispatchers.IO) {
                 dispatchCoordinator.snapshot().pendingCount
             }
+            val sosResult = DirectEmergencyDispatcher.executeAutonomousSos(
+                context = this@MonitoringService,
+                marker = decision.marker.label,
+                confidence = decision.confidence,
+            )
             val nativeHandoff = NativeSafetyHandoffController.request(
                 context = this@MonitoringService,
                 incidentId = enqueueResult.getOrNull(),
                 marker = decision.marker.label,
             )
             cancelAlertNotification()
-            val confirmedMessage = confirmationMessage(enqueueResult.isSuccess, nativeHandoff)
-            val confirmedNotification = NotificationCompat.Builder(this@MonitoringService, NotificationChannels.ALERT_CHANNEL_ID)
+            val confirmedMessage = if (sosResult.callInitiated || sosResult.smsSentCount > 0 || sosResult.sirenStarted) {
+                "Hands-free SOS: ${sosResult.summary}"
+            } else {
+                confirmationMessage(enqueueResult.isSuccess, nativeHandoff)
+            }
+            val stopSirenIntent = Intent(this@MonitoringService, MonitoringService::class.java).apply {
+                action = ACTION_STOP_SIREN
+            }
+            val stopSirenPendingIntent = PendingIntent.getService(
+                this@MonitoringService,
+                STOP_SIREN_REQUEST_CODE,
+                stopSirenIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notificationBuilder = NotificationCompat.Builder(this@MonitoringService, NotificationChannels.ALERT_CHANNEL_ID)
                 .setSmallIcon(com.acousticguard.R.drawable.ic_acoustic_guard)
                 .setContentTitle("Distress alert confirmed")
                 .setContentText(confirmedMessage)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(confirmedMessage))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setAutoCancel(true)
-                .build()
+
+            if (sosResult.sirenStarted) {
+                notificationBuilder.addAction(NotificationCompat.Action(0, "Silence Siren", stopSirenPendingIntent))
+            }
             runCatching {
-                NotificationManagerCompat.from(this@MonitoringService).notify(CONFIRMED_ALERT_NOTIFICATION_ID, confirmedNotification)
+                NotificationManagerCompat.from(this@MonitoringService).notify(CONFIRMED_ALERT_NOTIFICATION_ID, notificationBuilder.build())
             }
             MonitoringStatusStore.update { status ->
                 status.copy(
@@ -588,6 +616,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         pendingConfirmationJob = null
         pendingConfirmation = null
         cancelAlertNotification()
+        EmergencySirenPlayer.stop()
         MonitoringStatusStore.update {
             it.copy(
                 engineState = EngineState.MONITORING,
@@ -668,7 +697,9 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
 
     private companion object {
         const val ACTION_CANCEL_PENDING_ALERT = "com.acousticguard.action.CANCEL_PENDING_ALERT"
+        const val ACTION_STOP_SIREN = "com.acousticguard.action.STOP_SIREN"
         const val CANCEL_PENDING_ALERT_REQUEST_CODE = 3102
+        const val STOP_SIREN_REQUEST_CODE = 3105
         const val PENDING_ALERT_NOTIFICATION_ID = 3103
         const val CONFIRMED_ALERT_NOTIFICATION_ID = 3104
         const val COUNTDOWN_SECONDS = 10

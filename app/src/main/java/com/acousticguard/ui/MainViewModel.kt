@@ -9,9 +9,13 @@ import com.acousticguard.dispatch.DispatchSnapshot
 import com.acousticguard.monitoring.MonitoringController
 import com.acousticguard.monitoring.MonitoringStatusStore
 import com.acousticguard.safety.AccessibilityServiceAvailability
+import com.acousticguard.safety.DirectEmergencyDispatcher
+import com.acousticguard.safety.EmergencyContactsPreferences
+import com.acousticguard.safety.EmergencySirenPlayer
 import com.acousticguard.safety.NativeSafetyHandoffController
 import com.acousticguard.safety.NativeSafetyHandoffPreferences
 import com.acousticguard.safety.NativeSafetyHandoffStatusStore
+import com.acousticguard.safety.SosConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +43,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val dispatchUi: StateFlow<DispatchUiState> = mutableDispatchUi.asStateFlow()
     private val mutableNativeSafetyUi = MutableStateFlow(NativeSafetyUiState())
     val nativeSafetyUi: StateFlow<NativeSafetyUiState> = mutableNativeSafetyUi.asStateFlow()
+    val sosConfig = MutableStateFlow(EmergencyContactsPreferences.load(application))
+
+    fun saveSosConfig(config: SosConfig) {
+        EmergencyContactsPreferences.save(getApplication(), config)
+        sosConfig.value = config
+    }
+
+    fun stopSiren() {
+        EmergencySirenPlayer.stop()
+    }
+
+    fun triggerTestSos() {
+        DirectEmergencyDispatcher.executeAutonomousSos(
+            context = getApplication(),
+            marker = "Test Emergency",
+            confidence = 1.0f,
+        )
+    }
 
     init {
         refreshNativeSafety()
