@@ -3,6 +3,8 @@ package com.acousticguard.monitoring
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import androidx.core.app.NotificationManagerCompat
 import com.acousticguard.R
 
@@ -23,6 +25,11 @@ object NotificationChannels {
                 setShowBadge(false)
             },
         )
+        val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val alertAudioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
         manager.createNotificationChannel(
             NotificationChannel(
                 ALERT_CHANNEL_ID,
@@ -31,6 +38,8 @@ object NotificationChannels {
             ).apply {
                 description = context.getString(R.string.alert_channel_description)
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                setSound(alertUri, alertAudioAttributes)
             },
         )
     }

@@ -63,8 +63,8 @@ data class DetectionPolicy(
         /** The initial, explicitly uncalibrated policy shipped for prototype and replay tests. */
         val CURRENT = DetectionPolicy(
             policyVersion = "fusion-v1",
-            screamThreshold = 0.72f,
-            respiratoryThreshold = 0.80f,
+            screamThreshold = 0.52f,
+            respiratoryThreshold = 0.65f,
             impactThreshold = 0.74f,
             impactJerkThreshold = 0.42f,
             uncertaintyThreshold = 0.85f,

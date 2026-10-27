@@ -78,6 +78,26 @@ class YamnetLabelMapperTest {
             ),
         )
 
-        assertTrue(inference.screamProbability < 0.72f)
+        assertTrue(inference.screamProbability < 0.52f)
+    }
+
+    @Test
+    fun mapsSobbingAndGroaningToVocalDistress() {
+        val sobbingInference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Crying, sobbing", 0.85f)),
+            motion = MotionSnapshot(),
+        )
+        val groaningInference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Groan", 0.78f)),
+            motion = MotionSnapshot(),
+        )
+        val pantingInference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Pant", 0.75f)),
+            motion = MotionSnapshot(),
+        )
+
+        assertEquals(0.85f, sobbingInference.screamProbability, 0.0001f)
+        assertEquals(0.78f, groaningInference.screamProbability, 0.0001f)
+        assertEquals(0.75f, pantingInference.respiratoryProbability, 0.0001f)
     }
 }

@@ -39,7 +39,7 @@ class InferenceScheduler(
     private companion object {
         const val DEFAULT_QUIET_SCAN_INTERVAL_MS = 2_000L
         const val DEFAULT_UNCERTAIN_THRESHOLD = 0.75f
-        const val LOUDNESS_GATE = 0.55f
+        const val LOUDNESS_GATE = 0.45f
         const val SPECTRAL_FLUX_GATE = 0.45f
         const val CREST_FACTOR_GATE = 0.68f
         const val ENVELOPE_VARIATION_GATE = 0.55f

@@ -21,16 +21,16 @@ object YamnetLabelMapper {
         val scream = if (acousticFeatures == null) {
             screamLabelScore
         } else {
-            // YAMNet does not transcribe the spoken word and does not have a Hindi-specific
+            // YAMNet does not transcribe the spoken word and does not have a language-specific
             // distress label. It does, however, identify speech/shouting acoustically. Combine
             // that label score with loudness and vocal activity so a shouted "help" or "मदद"
             // can use the same language-independent path as a scream.
             val vocalEnergy = (
-                acousticFeatures.loudness * 0.65f +
-                    acousticFeatures.highFrequencyRatio * 0.20f +
+                (acousticFeatures.loudness - 0.25f).coerceAtLeast(0f) / 0.75f * 0.70f +
+                    acousticFeatures.highFrequencyRatio * 0.15f +
                     (1f - acousticFeatures.silenceRatio) * 0.15f
                 ).coerceIn(0f, 1f)
-            val loudSpeechScore = speechLabelScore * (0.35f + 0.65f * vocalEnergy)
+            val loudSpeechScore = speechLabelScore * (0.25f + 0.75f * vocalEnergy)
             maxOf(screamLabelScore, loudSpeechScore).coerceIn(0f, 1f)
         }
         val respiratory = if (acousticFeatures == null) {
@@ -53,8 +53,8 @@ object YamnetLabelMapper {
             // An absence of allow-listed distress labels is a useful, low-cost negative signal for
             // the scheduler even though YAMNet has no calibrated "normal" output head.
             strongestDistressProbability <= 0.20f -> 0.05f
-            strongestDistressProbability >= 0.72f -> (1f - strongestDistressProbability).coerceIn(0f, 1f)
-            else -> 0.80f
+            strongestDistressProbability >= 0.50f -> (1f - strongestDistressProbability).coerceIn(0f, 1f)
+            else -> 0.70f
         }
         val audioQuality = acousticFeatures?.let {
             (1f - it.silenceRatio).coerceIn(0f, 1f)
@@ -83,13 +83,17 @@ object YamnetLabelMapper {
 
     private const val MODEL_VERSION = "yamnet-audioset-1"
 
-    // Labels are taken from the YAMNet AudioSet class map. The mapping intentionally uses a small
-    // allow-list instead of treating every loud sound as danger.
+    // Labels are taken from the YAMNet AudioSet class map. The mapping intentionally uses an
+    // auditable allow-list of recognized human distress and vocalisations.
     private val SCREAM_LABELS = setOf(
         "Screaming",
         "Shout",
         "Yell",
         "Children shouting",
+        "Crying, sobbing",
+        "Wail, moan",
+        "Groan",
+        "Whimper",
     )
     private val SPEECH_LABELS = setOf(
         "Speech",
@@ -100,6 +104,8 @@ object YamnetLabelMapper {
     private val RESPIRATORY_LABELS = setOf(
         "Breathing",
         "Gasp",
+        "Pant",
+        "Cough",
     )
     private val IMPACT_LABELS = setOf(
         "Thump, thud",

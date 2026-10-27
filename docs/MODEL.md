@@ -44,12 +44,13 @@ The model is loaded from the APK and executed locally. There is no model downloa
 
 YAMNet emits AudioSet labels. The app does not treat every label as distress:
 
-- Vocal distress: `Screaming`, `Shout`, `Yell`, `Children shouting`
+- Vocal distress: `Screaming`, `Shout`, `Yell`, `Children shouting`, `Crying, sobbing`,
+  `Wail, moan`, `Groan`, `Whimper`
 - Loud speech escalation: `Speech`, `Male speech, man speaking`, `Female speech, woman speaking`,
   `Child speech, kid speaking`, combined with local
   loudness and vocal-activity features. This is language-independent; the app does not transcribe
   or store the spoken words.
-- Respiratory: `Breathing`, `Gasp`
+- Respiratory: `Breathing`, `Gasp`, `Pant`, `Cough`
 - Impact: `Thump, thud`, `Slap, smack`, `Whack, thwack`, `Smash, crash`, `Breaking`, `Knock`, `Bang`
 
 `YamnetLabelMapper` combines those label scores with DSP features and accelerometer jerk. The

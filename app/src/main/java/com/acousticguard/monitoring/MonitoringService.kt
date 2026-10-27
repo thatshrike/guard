@@ -470,6 +470,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
             modelVersion = modelVersion,
         )
         pendingConfirmation = confirmation
+        triggerAlertHaptic()
         pendingConfirmationJob = serviceScope.launch {
             for (remaining in COUNTDOWN_SECONDS downTo 1) {
                 if (!isActive || pendingConfirmation?.token != confirmation.token) return@launch
@@ -531,6 +532,18 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                 marker = decision.marker.label,
             )
             cancelAlertNotification()
+            val confirmedMessage = confirmationMessage(enqueueResult.isSuccess, nativeHandoff)
+            val confirmedNotification = NotificationCompat.Builder(this@MonitoringService, NotificationChannels.ALERT_CHANNEL_ID)
+                .setSmallIcon(com.acousticguard.R.drawable.ic_acoustic_guard)
+                .setContentTitle("Distress alert confirmed")
+                .setContentText(confirmedMessage)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(confirmedMessage))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            runCatching {
+                NotificationManagerCompat.from(this@MonitoringService).notify(CONFIRMED_ALERT_NOTIFICATION_ID, confirmedNotification)
+            }
             MonitoringStatusStore.update { status ->
                 status.copy(
                     engineState = EngineState.MONITORING,
@@ -539,7 +552,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     lastSignalAtEpochMs = System.currentTimeMillis(),
                     pendingIncidentCount = pendingCount,
                     countdownSecondsRemaining = null,
-                    message = confirmationMessage(enqueueResult.isSuccess, nativeHandoff),
+                    message = confirmedMessage,
                 )
             }
             pendingConfirmation = null
@@ -616,6 +629,26 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         runCatching { NotificationManagerCompat.from(this).cancel(PENDING_ALERT_NOTIFICATION_ID) }
     }
 
+    private fun triggerAlertHaptic() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(android.os.VibratorManager::class.java)
+                vibratorManager?.defaultVibrator?.vibrate(
+                    android.os.VibrationEffect.createWaveform(longArrayOf(0, 400, 200, 400), -1),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 400, 200, 400), -1))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(longArrayOf(0, 400, 200, 400), -1)
+                }
+            }
+        }
+    }
+
     private fun notificationsAvailable(): Boolean =
         NotificationChannels.areRequiredChannelsEnabled(this) &&
             (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -637,6 +670,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         const val ACTION_CANCEL_PENDING_ALERT = "com.acousticguard.action.CANCEL_PENDING_ALERT"
         const val CANCEL_PENDING_ALERT_REQUEST_CODE = 3102
         const val PENDING_ALERT_NOTIFICATION_ID = 3103
+        const val CONFIRMED_ALERT_NOTIFICATION_ID = 3104
         const val COUNTDOWN_SECONDS = 10
         const val MONITORING_NOTIFICATION_ID = 3100
         const val PCM_SCALE = 32768f
