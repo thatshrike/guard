@@ -68,6 +68,10 @@ class DetectionPipeline(
         )
     }
 
+    fun resetCandidateStreak() {
+        fusionEngine.resetCandidateStreak()
+    }
+
     override fun close() {
         classifier.close()
     }

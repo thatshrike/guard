@@ -18,31 +18,40 @@ object YamnetLabelMapper {
         val speechLabelScore = maximumScore(categories, SPEECH_LABELS)
         val respiratoryLabelScore = maximumScore(categories, RESPIRATORY_LABELS)
         val acousticImpact = maximumScore(categories, IMPACT_LABELS)
+        val suppressorScore = maximumScore(categories, SUPPRESSOR_LABELS)
+        val backgroundSuppression = (1f - suppressorScore).coerceIn(0f, 1f)
+
         val scream = if (acousticFeatures == null) {
-            screamLabelScore
+            screamLabelScore * backgroundSuppression
         } else {
             // YAMNet does not transcribe the spoken word and does not have a language-specific
-            // distress label. It does, however, identify speech/shouting acoustically. Combine
-            // that label score with loudness and vocal activity so a shouted "help" or "मदद"
-            // can use the same language-independent path as a scream.
+            // distress label. When speech is recognized, only escalate to distress if vocal
+            // intensity is acute (shouting/yelling) rather than ordinary conversational volume.
             val vocalEnergy = (
                 (acousticFeatures.loudness - 0.25f).coerceAtLeast(0f) / 0.75f * 0.70f +
                     acousticFeatures.highFrequencyRatio * 0.15f +
                     (1f - acousticFeatures.silenceRatio) * 0.15f
                 ).coerceIn(0f, 1f)
-            val loudSpeechScore = speechLabelScore * (0.25f + 0.75f * vocalEnergy)
-            maxOf(screamLabelScore, loudSpeechScore).coerceIn(0f, 1f)
+            val vocalScaling = if (vocalEnergy < 0.40f) {
+                0.20f * (vocalEnergy / 0.40f)
+            } else {
+                0.20f + 0.80f * ((vocalEnergy - 0.40f) / 0.60f)
+            }
+            val loudSpeechScore = speechLabelScore * vocalScaling
+            maxOf(screamLabelScore, loudSpeechScore).coerceIn(0f, 1f) * backgroundSuppression
         }
         val respiratory = if (acousticFeatures == null) {
-            respiratoryLabelScore
+            respiratoryLabelScore * backgroundSuppression
         } else {
-            (respiratoryLabelScore * (0.70f + 0.30f * (1f - acousticFeatures.silenceRatio))).coerceIn(0f, 1f)
+            (respiratoryLabelScore * (0.70f + 0.30f * (1f - acousticFeatures.silenceRatio))).coerceIn(0f, 1f) *
+                backgroundSuppression
         }
         val impact = if (acousticImpact > 0f) {
             val acousticImpulse = acousticFeatures?.let {
                 (it.spectralFlux * 0.55f + it.crestFactor * 0.45f).coerceIn(0f, 1f)
             } ?: acousticImpact
-            (acousticImpact * 0.55f + acousticImpulse * 0.20f + motion.jerk * 0.25f).coerceIn(0f, 1f)
+            (acousticImpact * 0.55f + acousticImpulse * 0.20f + motion.jerk * 0.25f).coerceIn(0f, 1f) *
+                backgroundSuppression
         } else {
             0f
         }
@@ -50,6 +59,9 @@ object YamnetLabelMapper {
         val strongestDistressProbability = maxOf(scream, respiratory, impact)
         val normal = (1f - strongestDistressProbability).coerceIn(0f, 1f)
         val uncertainty = when {
+            // When benign background sound (music, TV, laughter) strongly co-exists with distress labels,
+            // the window is ambiguous and should be rejected rather than advanced as a distress candidate.
+            suppressorScore >= 0.35f && strongestDistressProbability >= 0.25f -> 0.90f
             // An absence of allow-listed distress labels is a useful, low-cost negative signal for
             // the scheduler even though YAMNet has no calibrated "normal" output head.
             strongestDistressProbability <= 0.20f -> 0.05f
@@ -102,7 +114,6 @@ object YamnetLabelMapper {
         "Child speech, kid speaking",
     )
     private val RESPIRATORY_LABELS = setOf(
-        "Breathing",
         "Gasp",
         "Pant",
         "Cough",
@@ -115,5 +126,26 @@ object YamnetLabelMapper {
         "Breaking",
         "Knock",
         "Bang",
+    )
+
+    // Negative AudioSet classes representing benign entertainment, environmental, or social audio.
+    // When detected, these actively suppress false distress triggers.
+    private val SUPPRESSOR_LABELS = setOf(
+        "Music",
+        "Musical instrument",
+        "Singing",
+        "Laughter",
+        "Giggle",
+        "Snicker",
+        "Chuckle",
+        "Cheering",
+        "Applause",
+        "Television",
+        "Snoring",
+        "Vehicle",
+        "Car",
+        "Traffic noise, roadway noise",
+        "Bark",
+        "Dog",
     )
 }

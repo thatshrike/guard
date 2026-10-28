@@ -100,4 +100,68 @@ class YamnetLabelMapperTest {
         assertEquals(0.78f, groaningInference.screamProbability, 0.0001f)
         assertEquals(0.75f, pantingInference.respiratoryProbability, 0.0001f)
     }
+
+    @Test
+    fun musicAndTelevisionSuppressBackgroundVocalFalseAlarms() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(
+                YamnetCategoryScore("Speech", 0.85f),
+                YamnetCategoryScore("Music", 0.90f),
+            ),
+            motion = MotionSnapshot(),
+            acousticFeatures = AcousticFeatureVector(
+                loudness = 0.80f,
+                highFrequencyRatio = 0.60f,
+                spectralFlux = 0.30f,
+                crestFactor = 0.40f,
+                lowFrequencyRatio = 0.50f,
+                silenceRatio = 0.10f,
+                envelopeVariation = 0.40f,
+                motionEnergy = 0f,
+                motionJerk = 0f,
+            ),
+        )
+
+        // Music at 0.90 suppresses distress by (1 - 0.90) = 0.10 factor
+        assertTrue(inference.screamProbability < 0.20f)
+        assertEquals(0f, inference.respiratoryProbability, 0.0001f)
+    }
+
+    @Test
+    fun laughterSuppressesVocalDistressCandidate() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(
+                YamnetCategoryScore("Yell", 0.70f),
+                YamnetCategoryScore("Laughter", 0.85f),
+            ),
+            motion = MotionSnapshot(),
+        )
+
+        // Laughter at 0.85 suppresses the Yell score from 0.70 to 0.70 * (1 - 0.85) = 0.105
+        assertTrue(inference.screamProbability < 0.20f)
+    }
+
+    @Test
+    fun ambiguousCompetingBackgroundSoundYieldsHighUncertainty() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(
+                YamnetCategoryScore("Screaming", 0.60f),
+                YamnetCategoryScore("Music", 0.50f),
+            ),
+            motion = MotionSnapshot(),
+        )
+
+        // Competing music and scream is ambiguous; uncertainty must be >= 0.85 to fail-close
+        assertTrue(inference.uncertainty >= 0.85f)
+    }
+
+    @Test
+    fun ordinaryBreathingDoesNotTriggerRespiratoryDistress() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(YamnetCategoryScore("Breathing", 0.90f)),
+            motion = MotionSnapshot(),
+        )
+
+        assertEquals(0f, inference.respiratoryProbability, 0.0001f)
+    }
 }

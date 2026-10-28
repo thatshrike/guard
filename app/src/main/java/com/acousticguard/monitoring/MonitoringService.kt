@@ -48,6 +48,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
     private var activePolicy = DetectionPolicy.CURRENT
     private lateinit var dispatchCoordinator: DispatchCoordinator
     private var sensorManager: android.hardware.SensorManager? = null
+    private var audioManager: android.media.AudioManager? = null
     private var motionSamplingMode: MotionSamplingMode? = null
     private var audioRecord: AudioRecord? = null
     private var inferenceJob: Job? = null
@@ -60,6 +61,7 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
         dispatchCoordinator = DispatchCoordinator(applicationContext)
         NotificationChannels.create(this)
         sensorManager = getSystemService(android.content.Context.SENSOR_SERVICE) as android.hardware.SensorManager
+        audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
         serviceScope.launch(Dispatchers.IO) { dispatchCoordinator.retry() }
     }
 
@@ -324,6 +326,34 @@ class MonitoringService : Service(), android.hardware.SensorEventListener {
                     }
                     if (!isActive) break
                     metrics.recordAudioWindowRead()
+
+                    val isMediaActive = audioManager?.isMusicActive == true
+                    val isInCall = audioManager?.let {
+                        it.mode == android.media.AudioManager.MODE_IN_CALL ||
+                            it.mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+                    } == true
+                    val isSirenActive = EmergencySirenPlayer.isPlaying
+
+                    if (isMediaActive || isInCall || isSirenActive) {
+                        pipeline.resetCandidateStreak()
+                        metrics.recordSkippedModelInvocation()
+                        MonitoringStatusStore.update { status ->
+                            status.copy(
+                                engineState = EngineState.MONITORING,
+                                monitoringMode = if (status.motionReady) MonitoringMode.LOW_POWER else MonitoringMode.DEGRADED,
+                                motionSamplingMode = motionSamplingMode ?: MotionSamplingMode.LOW_POWER,
+                                detectionMetrics = metrics.snapshot(),
+                                message = when {
+                                    isSirenActive -> "Audio analysis paused during active siren."
+                                    isInCall -> "Audio analysis paused during active call."
+                                    else -> "Audio analysis paused during device media playback."
+                                },
+                            )
+                        }
+                        pcmBuffer.fill(0)
+                        normalizedBuffer.fill(0f)
+                        continue
+                    }
 
                     for (index in normalizedBuffer.indices) {
                         normalizedBuffer[index] = pcmBuffer[index] / PCM_SCALE
