@@ -27,7 +27,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.GraphicEq
@@ -43,8 +42,8 @@ import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Sms
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import com.acousticguard.safety.SosConfig
 import com.acousticguard.safety.EmergencySirenPlayer
 import androidx.compose.material3.Button
@@ -151,17 +150,11 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
                     icon = { Icon(Icons.Filled.Home, contentDescription = null) },
-                    label = { Text("Monitor") },
+                    label = { Text("Protection") },
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Filled.Shield, contentDescription = null) },
-                    label = { Text("Safety") },
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                     label = { Text("Settings") },
                 )
@@ -176,22 +169,10 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
             when (selectedTab) {
                 0 -> MonitorScreen(
                     status = status,
-                    pendingIncidentCount = dispatchUi.snapshot.pendingCount,
+                    sosConfig = sosConfig,
                     permissionMessage = permissionMessage,
                     onToggleMonitoring = ::toggleMonitoring,
-                    onOpenSafety = { selectedTab = 1 },
-                )
-                1 -> SafetyScreen(
-                    status = status,
-                    dispatchUi = dispatchUi,
-                    sosConfig = sosConfig,
-                    nativeSafetyUi = nativeSafetyUi,
-                    nativeSafetyStatus = nativeSafetyStatus,
-                    onOpenSettings = { selectedTab = 2 },
-                    onSilenceSiren = viewModel::stopSiren,
-                    onOpenAccessibilitySettings = {
-                        accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    },
+                    onOpenSettings = { selectedTab = 1 },
                 )
                 else -> SettingsScreen(
                     status = status,
@@ -218,10 +199,10 @@ fun AcousticGuardApp(viewModel: MainViewModel = viewModel()) {
 @Composable
 private fun MonitorScreen(
     status: MonitoringStatus,
-    pendingIncidentCount: Int,
+    sosConfig: SosConfig,
     permissionMessage: String?,
     onToggleMonitoring: (Boolean) -> Unit,
-    onOpenSafety: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -230,15 +211,14 @@ private fun MonitorScreen(
     ) {
         item {
             AppHeader(
-                eyebrow = "PRIVATE BY DESIGN",
-                title = "AcousticGuard",
-                subtitle = "Quiet protection that stays on your device.",
+                eyebrow = "PROTECTION",
+                title = "Quiet protection.",
+                subtitle = "Stay covered without giving up your privacy. AcousticGuard analyzes sound on this device and never saves recordings.",
             )
         }
         item {
             MonitoringHero(
                 status = status,
-                pendingIncidentCount = pendingIncidentCount,
                 onToggleMonitoring = onToggleMonitoring,
             )
         }
@@ -246,37 +226,13 @@ private fun MonitorScreen(
             item { InlineNotice(message = message, isError = true) }
         }
         item {
-            SectionHeader(
-                title = "Local detector",
-                caption = "Sustained screams or loud speech in any language start a 10-second cancel window.",
-            )
+            EmergencyPlanCard(config = sosConfig, onOpenSettings = onOpenSettings)
         }
         item {
-            DetectorCard(
-                icon = Icons.Filled.GraphicEq,
-                title = "Vocal distress",
-                description = "Screams and loud shouted speech, without transcribing or storing words.",
-                color = SignalBlue,
-            )
+            ProtectionSignalsCard()
         }
         item {
-            DetectorCard(
-                icon = Icons.Filled.Sensors,
-                title = "Respiratory distress",
-                description = "Stridor, hyperventilation, and agonal-gasping patterns.",
-                color = SignalAmber,
-            )
-        }
-        item {
-            DetectorCard(
-                icon = Icons.Filled.Vibration,
-                title = "Impact transient",
-                description = "Short acoustic impulses corroborated by inertial motion.",
-                color = SignalRed,
-            )
-        }
-        item {
-            PrivacyCard(onOpenSafety = onOpenSafety)
+            PrivacyCard()
         }
     }
 }
@@ -284,10 +240,23 @@ private fun MonitorScreen(
 @Composable
 private fun MonitoringHero(
     status: MonitoringStatus,
-    pendingIncidentCount: Int,
     onToggleMonitoring: (Boolean) -> Unit,
 ) {
     val active = status.isMonitoring || status.engineState == EngineState.STARTING
+    val title = when (status.engineState) {
+        EngineState.MONITORING -> "Protection is on"
+        EngineState.STARTING -> "Preparing protection"
+        EngineState.BLOCKED -> "Finish setup"
+        EngineState.ERROR -> "Protection is paused"
+        EngineState.OFF -> "Protection is off"
+    }
+    val description = when (status.engineState) {
+        EngineState.MONITORING -> "Listening locally for signs of distress."
+        EngineState.STARTING -> "Getting your local protection ready…"
+        EngineState.BLOCKED -> status.message
+        EngineState.ERROR -> status.message
+        EngineState.OFF -> "Turn it on when you’re ready."
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
@@ -302,51 +271,24 @@ private fun MonitoringHero(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 StatusOrb(active = active, state = status.engineState)
-                Switch(
-                    checked = active,
-                    onCheckedChange = onToggleMonitoring,
-                    modifier = Modifier.semantics { contentDescription = "Enable AcousticGuard monitoring" },
-                )
             }
             Spacer(modifier = Modifier.height(18.dp))
             Text(
-                text = when (status.engineState) {
-                    EngineState.MONITORING -> "Monitoring is active"
-                    EngineState.STARTING -> "Starting local monitoring"
-                    EngineState.BLOCKED -> "Monitoring needs access"
-                    EngineState.ERROR -> "Monitoring is paused"
-                    EngineState.OFF -> "Monitoring is off"
-                },
+                text = title,
                 style = MaterialTheme.typography.headlineSmall,
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = status.message,
+                text = description,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(20.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(
+            Button(
+                onClick = { onToggleMonitoring(!active) },
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                MetricCell(
-                    value = if (status.motionReady) "Ready" else "Standby",
-                    label = "Motion",
-                    modifier = Modifier.weight(1f),
-                )
-                MetricCell(
-                    value = "Local",
-                    label = "Inference",
-                    modifier = Modifier.weight(1f),
-                )
-                MetricCell(
-                    value = if (pendingIncidentCount == 0) "Clear" else pendingIncidentCount.toString(),
-                    label = "Queue",
-                    modifier = Modifier.weight(1f),
-                )
+                Text(if (active) "Turn off protection" else "Turn on protection")
             }
         }
     }
@@ -419,7 +361,7 @@ private fun DetectorCard(
 }
 
 @Composable
-private fun PrivacyCard(onOpenSafety: () -> Unit) {
+private fun PrivacyCard() {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -438,17 +380,132 @@ private fun PrivacyCard(onOpenSafety: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "AcousticGuard keeps only short-lived features for inference. Raw audio is not written, uploaded, or logged.",
+                "Audio is analyzed in short-lived memory for local detection. Raw recordings are not written, uploaded, or logged.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            TextButton(onClick = onOpenSafety, contentPadding = PaddingValues(0.dp)) {
-                Text("Review the safety model")
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun EmergencyPlanCard(
+    config: SosConfig,
+    onOpenSettings: () -> Unit,
+) {
+    val callReady = config.autoCallEnabled && config.primaryCallNumber.isNotBlank()
+    val smsCount = config.emergencySmsNumbers
+        .split(',', ';', '\n')
+        .count { it.isNotBlank() }
+    val smsReady = config.autoSmsEnabled && smsCount > 0
+    val planReady = callReady || smsReady || config.sirenEnabled
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Emergency plan", style = MaterialTheme.typography.titleLarge)
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        if (planReady) "Ready to respond if a confirmed event occurs." else "Add a response option so protection is ready when you need it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    imageVector = if (planReady) Icons.Filled.CheckCircle else Icons.Filled.WarningAmber,
+                    contentDescription = if (planReady) "Emergency plan ready" else "Emergency plan needs attention",
+                    tint = if (planReady) SignalGreen else SignalAmber,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            PlanStatusRow(Icons.Filled.Phone, "Call", if (callReady) "Primary contact ready" else "Not configured", callReady)
+            PlanStatusRow(Icons.Filled.Sms, "SMS", if (smsReady) "$smsCount contact${if (smsCount == 1) "" else "s"} ready" else "Not configured", smsReady)
+            PlanStatusRow(Icons.AutoMirrored.Filled.VolumeUp, "Siren", if (config.sirenEnabled) "Deterrent alarm ready" else "Turned off", config.sirenEnabled)
+            Spacer(modifier = Modifier.height(14.dp))
+            OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+                Text("Review emergency plan")
             }
         }
+    }
+}
+
+@Composable
+private fun PlanStatusRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    detail: String,
+    ready: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBadge(icon = icon, tint = if (ready) SignalGreen else SignalAmber)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(
+            imageVector = if (ready) Icons.Filled.CheckCircle else Icons.Filled.WarningAmber,
+            contentDescription = if (ready) "Ready" else "Needs attention",
+            tint = if (ready) SignalGreen else SignalAmber,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun ProtectionSignalsCard() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text("What protection watches for", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(10.dp))
+            SignalRow(Icons.Filled.GraphicEq, "Vocal distress", SignalBlue)
+            SignalRow(Icons.Filled.Sensors, "Breathing changes", SignalAmber)
+            SignalRow(Icons.Filled.Vibration, "Impact with motion", SignalRed)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Signals are corroborated locally before the cancellation window begins.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SignalRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBadge(icon = icon, tint = tint)
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -577,7 +634,7 @@ private fun AutonomousSosCard(
                     modifier = Modifier.fillMaxWidth(),
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = SignalRed),
                 ) {
-                    Icon(Icons.Filled.VolumeOff, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.VolumeOff, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("SILENCE SIREN")
                 }
@@ -800,6 +857,7 @@ private fun SettingsScreen(
     val context = LocalContext.current
     val microphoneGranted = hasPermission(context, Manifest.permission.RECORD_AUDIO)
     val notificationsGranted = notificationsAvailable(context)
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -809,8 +867,8 @@ private fun SettingsScreen(
         item {
             AppHeader(
                 eyebrow = "SETTINGS",
-                title = "Safety & controls.",
-                subtitle = "Configure automated emergency calling, SMS, and deterrence.",
+                title = "Your safety plan.",
+                subtitle = "Choose what should happen if AcousticGuard confirms distress.",
             )
         }
         item {
@@ -835,14 +893,14 @@ private fun SettingsScreen(
                     PermissionRow(
                         icon = Icons.Filled.Mic,
                         title = "Microphone",
-                        detail = if (microphoneGranted) "Allowed for local inference" else "Required to monitor",
+                        detail = if (microphoneGranted) "Ready for on-device protection" else "Needed for protection",
                         granted = microphoneGranted,
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     PermissionRow(
                         icon = Icons.Filled.Info,
                         title = "Notifications",
-                        detail = if (notificationsGranted) "Monitoring status stays visible" else "Required for the foreground service",
+                        detail = if (notificationsGranted) "Protection status stays visible" else "Needed to keep protection visible",
                         granted = notificationsGranted,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
@@ -870,62 +928,59 @@ private fun SettingsScreen(
             }
         }
         item {
-            NativeSafetySettingsCard(
-                settings = nativeSafetyUi,
-                onEnabledChange = onNativeSafetyEnabled,
-                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-            )
+            TextButton(
+                onClick = { advancedExpanded = !advancedExpanded },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (advancedExpanded) "Hide advanced settings" else "Show advanced settings")
+            }
         }
-        item {
-            DispatchSettingsCard(
+        if (advancedExpanded) {
+            item {
+                NativeSafetySettingsCard(
+                    settings = nativeSafetyUi,
+                    onEnabledChange = onNativeSafetyEnabled,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                )
+            }
+            item {
+                DispatchSettingsCard(
                     state = dispatchUi,
                     onSave = onSaveDispatchSettings,
                     onClearQueue = onClearDispatchQueue,
                     onQueueTestEvent = onQueueTestEvent,
                 )
-        }
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(22.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 1.dp,
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text("Engine", style = MaterialTheme.typography.titleLarge)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    SettingRow(label = "Model", value = status.modelInfo.modelVersion)
-                    SettingRow(
-                        label = "Runtime",
-                        value = "${status.modelInfo.runtime} / ${status.modelInfo.quantization}",
-                    )
-                    SettingRow(label = "Inference", value = "On-device")
-                    SettingRow(label = "Monitoring state", value = status.monitoringMode.label)
-                    SettingRow(label = "Model source", value = status.modelInfo.source.label)
-                    SettingRow(
-                        label = "Fallback active",
-                        value = if (status.fallbackModelActive) "Yes" else "No",
-                    )
-                    SettingRow(label = "Audio retention", value = "None")
-                    SettingRow(
-                        label = "Network transport",
-                        value = if (dispatchUi.settings.enabled) "Enabled for new events" else "Disabled · local-only",
-                    )
-                    SettingRow(label = "Motion corroboration", value = if (status.motionReady) "Available" else "Standby")
-                    status.lastModelError?.let { error ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Model note: $error",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp,
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text("Diagnostics", style = MaterialTheme.typography.titleLarge)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SettingRow(label = "Model", value = status.modelInfo.modelVersion)
+                        SettingRow(label = "Inference", value = "On-device")
+                        SettingRow(label = "Monitoring state", value = status.monitoringMode.label)
+                        SettingRow(label = "Audio retention", value = "None")
+                        SettingRow(label = "Motion corroboration", value = if (status.motionReady) "Available" else "Standby")
+                        status.lastModelError?.let { error ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
         }
         item {
             Text(
-                "AcousticGuard does not create an account, sync recordings, or use a cloud model. Optional receiver delivery sends encrypted metadata only; it is not a direct emergency-service connection.",
+                "Private by default. No account is required, and recordings never leave this device.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -968,9 +1023,9 @@ private fun AutonomousSosSettingsCard(
                 Icon(Icons.Filled.Phone, contentDescription = null, tint = SignalBlue)
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Hands-Free Autonomous SOS", style = MaterialTheme.typography.titleLarge)
+                    Text("Emergency response", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Direct cellular calling, SMS broadcast, and deterrent siren upon confirmed distress.",
+                        "Choose who to contact and what response to trigger after a confirmed event.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -978,7 +1033,6 @@ private fun AutonomousSosSettingsCard(
             }
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Primary Call Number
             OutlinedTextField(
                 value = primaryCallNumber,
                 onValueChange = {
@@ -986,8 +1040,8 @@ private fun AutonomousSosSettingsCard(
                     savedNotice = false
                 },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Primary Emergency Phone Number") },
-                placeholder = { Text("e.g. +1234567890 or 911") },
+                label = { Text("Primary contact") },
+                placeholder = { Text("Phone number") },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Phone, contentDescription = null) },
             )
@@ -997,7 +1051,7 @@ private fun AutonomousSosSettingsCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Auto-dial on confirmed distress", style = MaterialTheme.typography.bodyMedium)
+                Text("Call this contact automatically", style = MaterialTheme.typography.bodyMedium)
                 Switch(
                     checked = autoCallEnabled,
                     onCheckedChange = {
@@ -1008,8 +1062,8 @@ private fun AutonomousSosSettingsCard(
             }
             PermissionRow(
                 icon = Icons.Filled.Phone,
-                title = "Direct calling access",
-                detail = if (callPermissionGranted) "Granted (CALL_PHONE)" else "Required for autonomous emergency call",
+                title = "Calling access",
+                detail = if (callPermissionGranted) "Ready" else "Needed for automatic calling",
                 granted = callPermissionGranted,
             )
 
@@ -1017,7 +1071,6 @@ private fun AutonomousSosSettingsCard(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Emergency SMS Numbers
             OutlinedTextField(
                 value = emergencySmsNumbers,
                 onValueChange = {
@@ -1025,8 +1078,8 @@ private fun AutonomousSosSettingsCard(
                     savedNotice = false
                 },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Emergency SMS Recipients") },
-                placeholder = { Text("Comma-separated phone numbers") },
+                label = { Text("SMS contacts") },
+                placeholder = { Text("Separate phone numbers with commas") },
                 leadingIcon = { Icon(Icons.Filled.Sms, contentDescription = null) },
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -1035,7 +1088,7 @@ private fun AutonomousSosSettingsCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Send emergency SMS alerts", style = MaterialTheme.typography.bodyMedium)
+                Text("Send an SMS automatically", style = MaterialTheme.typography.bodyMedium)
                 Switch(
                     checked = autoSmsEnabled,
                     onCheckedChange = {
@@ -1046,8 +1099,8 @@ private fun AutonomousSosSettingsCard(
             }
             PermissionRow(
                 icon = Icons.Filled.Sms,
-                title = "Emergency SMS access",
-                detail = if (smsPermissionGranted) "Granted (SEND_SMS)" else "Required for autonomous emergency texts",
+                title = "Messaging access",
+                detail = if (smsPermissionGranted) "Ready" else "Needed for automatic SMS",
                 granted = smsPermissionGranted,
             )
 
@@ -1057,7 +1110,7 @@ private fun AutonomousSosSettingsCard(
                     onClick = onRequestPermissions,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Grant Calling & SMS Permissions")
+                    Text("Allow calling and messaging")
                 }
             }
 
@@ -1065,15 +1118,14 @@ private fun AutonomousSosSettingsCard(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Siren Toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Piercing Deterrent Siren", style = MaterialTheme.typography.bodyLarge)
-                    Text("Sounds loud 850/1250 Hz siren through speaker to deter attackers", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Play a deterrent alarm", style = MaterialTheme.typography.bodyLarge)
+                    Text("Sound an alarm through the phone speaker", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(
                     checked = sirenEnabled,
@@ -1101,7 +1153,7 @@ private fun AutonomousSosSettingsCard(
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (savedNotice) "Settings Saved!" else "Save Emergency SOS Settings")
+                Text(if (savedNotice) "Plan saved" else "Save emergency plan")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1113,7 +1165,7 @@ private fun AutonomousSosSettingsCard(
                     onClick = onTestSos,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Test SOS Action")
+                    Text("Test response")
                 }
                 if (EmergencySirenPlayer.isPlaying) {
                     Button(

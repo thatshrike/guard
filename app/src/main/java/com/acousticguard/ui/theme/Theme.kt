@@ -13,10 +13,10 @@ import androidx.compose.ui.unit.sp
 
 private val LightColors = lightColorScheme(
     primary = SignalBlue,
-    onPrimary = LightSurface,
+    onPrimary = Color.White,
     primaryContainer = ColorTokens.lightBlueContainer,
-    onPrimaryContainer = LightPrimaryText,
-    secondary = LightSecondaryText,
+    onPrimaryContainer = ColorTokens.lightBlueText,
+    secondary = ColorTokens.lightSecondary,
     onSecondary = LightSurface,
     background = LightBackground,
     onBackground = LightPrimaryText,
@@ -25,15 +25,15 @@ private val LightColors = lightColorScheme(
     surfaceVariant = LightSecondarySurface,
     onSurfaceVariant = LightSecondaryText,
     error = SignalRed,
-    onError = LightSurface,
+    onError = Color.White,
 )
 
 private val DarkColors = darkColorScheme(
     primary = SignalBlue,
-    onPrimary = DarkPrimaryText,
+    onPrimary = Color.White,
     primaryContainer = ColorTokens.darkBlueContainer,
-    onPrimaryContainer = DarkPrimaryText,
-    secondary = DarkSecondaryText,
+    onPrimaryContainer = ColorTokens.darkBlueText,
+    secondary = ColorTokens.darkSecondary,
     onSecondary = DarkPrimaryText,
     background = DarkBackground,
     onBackground = DarkPrimaryText,
@@ -42,7 +42,7 @@ private val DarkColors = darkColorScheme(
     surfaceVariant = DarkSecondarySurface,
     onSurfaceVariant = DarkSecondaryText,
     error = SignalRed,
-    onError = DarkPrimaryText,
+    onError = Color.White,
 )
 
 private val AppTypography = Typography().let { base ->
@@ -50,8 +50,8 @@ private val AppTypography = Typography().let { base ->
         displaySmall = base.displaySmall.copy(
             fontFamily = FontFamily.SansSerif,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 34.sp,
-            lineHeight = 41.sp,
+            fontSize = 32.sp,
+            lineHeight = 39.sp,
         ),
         headlineSmall = base.headlineSmall.copy(
             fontFamily = FontFamily.SansSerif,
@@ -62,8 +62,8 @@ private val AppTypography = Typography().let { base ->
         titleLarge = base.titleLarge.copy(
             fontFamily = FontFamily.SansSerif,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 20.sp,
-            lineHeight = 25.sp,
+            fontSize = 19.sp,
+            lineHeight = 24.sp,
         ),
         bodyLarge = base.bodyLarge.copy(
             fontFamily = FontFamily.SansSerif,
@@ -94,6 +94,10 @@ fun AcousticGuardTheme(content: @Composable () -> Unit) {
 }
 
 private object ColorTokens {
-    val lightBlueContainer = androidx.compose.ui.graphics.Color(0xFFD9ECFF)
-    val darkBlueContainer = androidx.compose.ui.graphics.Color(0xFF123A63)
+    val lightBlueContainer = Color(0xFFE6EBFF)
+    val lightBlueText = Color(0xFF19358F)
+    val lightSecondary = Color(0xFF5B6375)
+    val darkBlueContainer = Color(0xFF253B91)
+    val darkBlueText = Color(0xFFE7EBFF)
+    val darkSecondary = Color(0xFFBAC4D9)
 }

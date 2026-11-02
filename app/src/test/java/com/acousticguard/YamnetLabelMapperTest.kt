@@ -142,6 +142,32 @@ class YamnetLabelMapperTest {
     }
 
     @Test
+    fun bundledChuckleChortleLabelSuppressesBenignVocalFalseAlarm() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(
+                YamnetCategoryScore("Yell", 0.70f),
+                YamnetCategoryScore("Chuckle, chortle", 0.85f),
+            ),
+            motion = MotionSnapshot(),
+        )
+
+        assertTrue(inference.screamProbability < 0.20f)
+    }
+
+    @Test
+    fun bundledBellyLaughLabelSuppressesBenignVocalFalseAlarm() {
+        val inference = YamnetLabelMapper.toInference(
+            categories = listOf(
+                YamnetCategoryScore("Yell", 0.70f),
+                YamnetCategoryScore("Belly laugh", 0.85f),
+            ),
+            motion = MotionSnapshot(),
+        )
+
+        assertTrue(inference.screamProbability < 0.20f)
+    }
+
+    @Test
     fun ambiguousCompetingBackgroundSoundYieldsHighUncertainty() {
         val inference = YamnetLabelMapper.toInference(
             categories = listOf(

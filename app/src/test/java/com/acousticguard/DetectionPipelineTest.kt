@@ -57,7 +57,7 @@ class DetectionPipelineTest {
     }
 
     @Test
-    fun aSkippedQuietWindowBreaksTheConfirmationStreak() {
+    fun periodicQuietScansCanConfirmSustainedLowEnergyDistress() {
         val pipeline = DetectionPipeline(
             classifier = FakeClassifier { screamInference() },
             scheduler = InferenceScheduler(quietScanIntervalMs = 2_000L),
@@ -66,12 +66,13 @@ class DetectionPipelineTest {
 
         pipeline.processAt(samples, MotionSnapshot(), nowMs = 0L)
         val skipped = pipeline.processAt(samples, MotionSnapshot(), nowMs = 1_000L)
-        val result = pipeline.processAt(samples, MotionSnapshot(), nowMs = 2_000L)
+        val secondScan = pipeline.processAt(samples, MotionSnapshot(), nowMs = 2_000L)
+        pipeline.processAt(samples, MotionSnapshot(), nowMs = 3_000L)
+        val result = pipeline.processAt(samples, MotionSnapshot(), nowMs = 4_000L)
 
         assertFalse(skipped.modelInvoked)
-        assertTrue(result.modelInvoked)
-        assertEquals(1, result.decision?.consecutiveWindows)
-        assertFalse(result.decision?.confirmed == true)
+        assertEquals(2, secondScan.decision?.consecutiveWindows)
+        assertTrue(result.decision?.confirmed == true)
     }
 
     @Test
